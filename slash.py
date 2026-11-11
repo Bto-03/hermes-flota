@@ -6,6 +6,8 @@
 ``/flota sleep <machine>``        put it to sleep now (its sleep action, suspend when none)
 ``/flota off <machine>``          power it off; only a machine Flota can wake again (wol, wol_via, command),
                                   and not while "Allow power off" is turned off in Plugins > Flota
+``/flota sleep|off <machine> force``  the same even while Flota counts subagents on it (you typed it;
+                                  the agent's tool has no such option)
 """
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -18,7 +20,7 @@ from .wake import WakeError, ensure_ready, is_up
 
 SUBCOMMANDS = ("status", "dry-run", "wake", "sleep", "off")
 _NO_MACHINES = ("No machines configured. Add them in the Flota panel (Plugins > Flota), or run "
-                "`hermes flota setup <name> --host HOST --user USER` in a terminal.")
+                "`hermes flota setup USER@HOST` in a terminal.")
 _OFF_DISABLED = POWER_OFF_DISABLED
 
 
@@ -62,6 +64,9 @@ def handle(raw_args: str, *, settings: Mapping, probe=is_up, ensure=ensure_ready
         command = words[0].lower() if words else "status"
         if command == "status" and len(words) <= 1:
             return _status(machines, problems, probe, sleeper, profile_exists)
+        force = len(words) == 3 and command in ("sleep", "off") and words[2].lower() == "force"
+        if force:
+            words.pop()
         machine = machines.get(words[1]) if len(words) == 2 else None
         if command in SUBCOMMANDS[1:] and len(words) == 2 and machine is None:
             if not machines and not problems:
@@ -73,23 +78,31 @@ def handle(raw_args: str, *, settings: Mapping, probe=is_up, ensure=ensure_ready
             return _dry_run(machine, probe, profile_exists)
         if command == "wake":
             try:
-                return f"{machine.name} is up (waited {ensure(machine):.0f}s)"
+                waited = ensure(machine)
             except WakeError as exc:
                 return str(exc)
+            if sleeper is not None:  # woken with no subagent on it: it still gets its idle timer
+                sleeper.watch(machine)
+            return f"{machine.name} is up (waited {waited:.0f}s)"
         if command == "off":
             refusal = power_off_refusal(machine, settings)
             if refusal:
                 return refusal
-            # Through the sleeper when there is one, so a machine running subagents is kept on.
-            return sleeper.sleep_now(machine, "poweroff") if sleeper else power(machine, "poweroff")
-        return sleeper.sleep_now(machine) if sleeper else power(machine, power_mod.default_action(machine))
+        action = "poweroff" if command == "off" else power_mod.default_action(machine)
+        if force and sleeper:  # typed by the user: a count that never cleared must not keep it on
+            sleeper.mark_down(machine)
+            return power(machine, action)
+        # Through the sleeper when there is one, so a machine running subagents is kept on.
+        if sleeper:
+            return sleeper.sleep_now(machine, "poweroff") if command == "off" else sleeper.sleep_now(machine)
+        return power(machine, action)
     except Exception as exc:  # a chat command answers with text, whatever broke
         return f"/flota failed: {exc}"
 
 
 def _usage(machines: Mapping[str, Machine]) -> str:
     names = ", ".join(machines) or "none configured"
-    return ("Usage: /flota [status | dry-run <machine> | wake <machine> | sleep <machine> | off <machine>]"
+    return ("Usage: /flota [status | dry-run <machine> | wake <machine> | sleep <machine> [force] | off <machine> [force]]"
             f"\nMachines: {names}")
 
 

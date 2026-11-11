@@ -27,6 +27,8 @@ Before opening a pull request:
 hermes plugins validate .
 ```
 
+It should end with `Validation passed.`; the scan must say `safe`; the one expected warning (private core imports) is explained in [docs/security.md](docs/security.md#install-scan). Don't add new ones.
+
 ## Guidelines
 
 - Keep changes small and covered by a test. Bug fixes start with a failing test.

@@ -3,7 +3,7 @@
 Regression: the desktop app scopes plugin calls to the profile you last chatted with; clicking a
 ship's bot opens a chat as ``flota-<machine>`` (cloned from the owner, so Flota is enabled there), so
 core bound the request's hermes home to that profile and ``GET /invite`` wrote the nonce into
-``profiles/flota-escritorio/flota/invites.json``, where ``hermes -p default flota add-ship`` never
+``profiles/flota-studio/flota/invites.json``, where ``hermes -p default flota add-ship`` never
 looks. Real core seams (hermes-home override, config read/write) on a temporary Hermes root.
 """
 import contextlib
@@ -45,10 +45,10 @@ def scoped(path):
 @pytest.fixture
 def root(tmp_path, monkeypatch):
     root = tmp_path / ".hermes"
-    for d in (root, root / "profiles" / "asistente"):
+    for d in (root, root / "profiles" / "aide"):
         d.mkdir(parents=True)
         (d / "config.yaml").write_text("model: x\n")
-    plumbing = root / "profiles" / "flota-escritorio"
+    plumbing = root / "profiles" / "flota-studio"
     monkeypatch.setenv("HERMES_HOME", str(root))
     monkeypatch.setattr(cli, "_flota_key", lambda configured: (PUB, "/k/id_ed25519"))
     monkeypatch.setattr(cli, "_hostname", lambda: "servidor")
@@ -66,10 +66,10 @@ def root(tmp_path, monkeypatch):
 
     import hermes_cli.profiles
     monkeypatch.setattr(hermes_cli.profiles, "create_profile", create_profile)
-    return SimpleNamespace(root=root, asistente=root / "profiles" / "asistente", plumbing=plumbing, clones=clones)
+    return SimpleNamespace(root=root, aide=root / "profiles" / "aide", plumbing=plumbing, clones=clones)
 
 
-def _setup(name="escritorio"):
+def _setup(name="studio"):
     return cli.run_setup(SimpleNamespace(name=name, host="192.0.2.28", user="carol", no_detect=True,
                                          sleep="none", wake="none"))
 
@@ -80,12 +80,12 @@ def _nonce(invite):
 
 def test_invite_from_a_plumbing_scope_lands_in_the_root_profile(root):
     with scoped(root.root):
-        assert _setup()[0] == 0  # the flagship's setup made flota-escritorio
-    with scoped(root.plumbing):  # the Webapp after "open chat" with escritorio's bot
+        assert _setup()[0] == 0  # the flagship's setup made flota-studio
+    with scoped(root.plumbing):  # the Webapp after "open chat" with studio's bot
         invite = cli.run_invite()
         assert cli._active_config_path() == root.root / "config.yaml"
         assert idle.state_path() == root.root / "flota" / "state.json"
-        assert "escritorio" in slash.load_settings()["machines"]
+        assert "studio" in slash.load_settings()["machines"]
     assert not (root.plumbing / "flota" / "invites.json").exists()
     store = root.root / "flota" / "invites.json"
     assert _nonce(invite) in json.loads(store.read_text())
@@ -97,26 +97,26 @@ def test_invite_from_a_plumbing_scope_lands_in_the_root_profile(root):
 
 
 def test_plumbing_profile_maps_to_the_profile_that_set_it_up(root):
-    with scoped(root.asistente):
+    with scoped(root.aide):
         assert _setup()[0] == 0
-    assert root.clones == [root.asistente]  # cloned from the active profile
-    assert (root.plumbing / "flota" / "owner").read_text().strip() == str(root.asistente)
+    assert root.clones == [root.aide]  # cloned from the active profile
+    assert (root.plumbing / "flota" / "owner").read_text().strip() == str(root.aide)
     with scoped(root.plumbing):
-        assert home.flota_home() == root.asistente
+        assert home.flota_home() == root.aide
         cli.run_invite()
         with home.owner_scope():
-            assert Path(get_hermes_home()) == root.asistente
+            assert Path(get_hermes_home()) == root.aide
         assert Path(get_hermes_home()) == root.plumbing  # restored: the scope is context-local
-    assert (root.asistente / "flota" / "invites.json").is_file()
+    assert (root.aide / "flota" / "invites.json").is_file()
     assert not (root.root / "flota").exists() and not (root.plumbing / "flota" / "invites.json").exists()
     # A setup run from the plumbing scope saves the machine in the owner, clones nothing.
     with scoped(root.plumbing):
         assert _setup()[0] == 0
     plumbing_cfg = cli._read_config(root.plumbing / "config.yaml")
-    owner_cfg = cli._read_config(root.asistente / "config.yaml")
+    owner_cfg = cli._read_config(root.aide / "config.yaml")
     assert "plugins" not in plumbing_cfg and plumbing_cfg["terminal"]["ssh_host"] == "192.0.2.28"
-    assert owner_cfg["plugins"]["entries"]["flota"]["settings"]["machines"]["escritorio"]["profile"] == \
-        "flota-escritorio"
+    assert owner_cfg["plugins"]["entries"]["flota"]["settings"]["machines"]["studio"]["profile"] == \
+        "flota-studio"
 
 
 def test_owner_marker_that_points_nowhere_falls_back_to_the_root(root):
@@ -124,7 +124,7 @@ def test_owner_marker_that_points_nowhere_falls_back_to_the_root(root):
     (root.plumbing / "flota").mkdir()
     (root.plumbing / "flota" / "owner").write_text("/nonexistent/profile\n")
     assert home.owner_of(root.plumbing) == root.root
-    assert home.owner_of(root.asistente) == root.asistente
+    assert home.owner_of(root.aide) == root.aide
     assert home.owner_of(root.root) == root.root
 
 
@@ -141,14 +141,14 @@ def test_dashboard_invite_and_worker_threads_keep_the_request_profile(root):
     with scoped(root.root):
         _setup()
     with scoped(root.plumbing):
-        invite = api.invite()
+        invite = api.make_invite(None)  # POST /invite mints; GET /invite only reads the last one
     assert _nonce(invite) in json.loads((root.root / "flota" / "invites.json").read_text())
     assert not (root.plumbing / "flota" / "invites.json").exists()
     # Setup / add-ship run in a worker thread: it must see the request's profile, not the launch one.
-    with scoped(root.asistente):
+    with scoped(root.aide):
         seen = api._in_worker(lambda: {"home": str(get_hermes_home()), "thread": threading.current_thread().name},
                               "x")
-    assert seen == {"home": str(root.asistente), "thread": "flota-setup-x"}
+    assert seen == {"home": str(root.aide), "thread": "flota-setup-x"}
 
 
 # --- plumbing profiles stay out of the Desktop Bots roster ---------------------------------------
@@ -166,7 +166,7 @@ def test_setup_hides_the_plumbing_profile_from_the_bots_roster(root):
     assert bots["hidden"] is True
     assert "title" not in bots  # a title would make the Flota map count it as a bot
     assert meta["_ui_meta_revisions"]["hermes-bots"] == 1  # Desktop's CAS sees the change
-    assert "escritorio" in meta["description"] and "Flota" in meta["description"]
+    assert "studio" in meta["description"] and "Flota" in meta["description"]
     with scoped(root.root):  # a re-run changes nothing
         assert _setup()[0] == 0
     assert _profile_yaml(root.plumbing)["_ui_meta_revisions"]["hermes-bots"] == 1
@@ -177,17 +177,17 @@ def test_hiding_keeps_what_the_user_set(root):
     (root.plumbing / "profile.yaml").write_text(
         "description: mine\nui_meta:\n  hermes-bots:\n    color: red\n  other: {x: 1}\n"
         "_ui_meta_revisions:\n  hermes-bots: 4\n")
-    assert home.hide_from_roster(root.plumbing, "escritorio") is True
+    assert home.hide_from_roster(root.plumbing, "studio") is True
     meta = _profile_yaml(root.plumbing)
     assert meta["description"] == "mine" and meta["ui_meta"]["other"] == {"x": 1}
     assert meta["ui_meta"]["hermes-bots"] == {"color": "red", "hidden": True}
     assert meta["_ui_meta_revisions"]["hermes-bots"] == 5
-    assert home.hide_from_roster(root.plumbing, "escritorio") is False  # already hidden
+    assert home.hide_from_roster(root.plumbing, "studio") is False  # already hidden
     assert home.hide_from_roster(root.root / "profiles" / "nope", "x") is False  # never raises
 
 
 def test_doctor_fix_hides_existing_plumbing_profiles(root, capsys):
-    for name in ("flota-escritorio", "flota-viejo"):
+    for name in ("flota-studio", "flota-viejo"):
         (root.root / "profiles" / name).mkdir(parents=True)
         (root.root / "profiles" / name / "config.yaml").write_text("model: x\n")
     import argparse
@@ -197,10 +197,10 @@ def test_doctor_fix_hides_existing_plumbing_profiles(root, capsys):
         args = parser.parse_args(["doctor", "--fix"])
         args.func(args)
     out = capsys.readouterr().out
-    assert "flota-escritorio" in out and "flota-viejo" in out
-    for name in ("flota-escritorio", "flota-viejo"):
+    assert "flota-studio" in out and "flota-viejo" in out
+    for name in ("flota-studio", "flota-viejo"):
         assert _profile_yaml(root.root / "profiles" / name)["ui_meta"]["hermes-bots"]["hidden"] is True
-    assert not (root.asistente / "profile.yaml").exists()  # a real bot is never touched
+    assert not (root.aide / "profile.yaml").exists()  # a real bot is never touched
 
 
 def test_deletions_reach_the_real_config(root):
@@ -208,9 +208,9 @@ def test_deletions_reach_the_real_config(root):
     role, leaving a fleet and force-removing ships are deliberate deletions and must land."""
     api = _load_api()
     with scoped(root.root):
-        assert _setup("escritorio")[0] == 0 and _setup("sinwol")[0] == 0
+        assert _setup("studio")[0] == 0 and _setup("sinwol")[0] == 0
         assert api.delete_machine("sinwol")["ok"]
-        assert list(cli._ships(cli._read_config(cli._active_config_path()))) == ["escritorio"]
+        assert list(cli._ships(cli._read_config(cli._active_config_path()))) == ["studio"]
         cli.set_role("flagship")
         assert cli.set_role(None)["role"] is None and cli.role() == "flagship"  # inferred again
         assert "role" not in cli._panel()

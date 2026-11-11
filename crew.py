@@ -28,6 +28,45 @@ _MIME = {"png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}
 _FLOTA_PREFIX = "flota-"
 _avatars: dict[str, tuple[float, str | None]] = {}
 _avatars_lock = threading.Lock()
+MAX_CREW = 64  # bots per machine sent to the page
+NAME_CAP = 64
+# A colour is a hex, a plain keyword or one colour function of numbers: never url(), var() or ';'.
+_COLOR = re.compile(r"#[0-9a-fA-F]{3,8}|[A-Za-z]{3,24}"
+                    r"|(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\([0-9A-Za-z.,%/ +-]{1,48}\)")
+_AVATAR = re.compile(r"data:image/(?:png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/]+={0,2}")
+_AVATAR_URL_CAP = AVATAR_CAP * 4 // 3 + 64
+
+
+def safe_color(value) -> str | None:
+    """``value`` when it is a plain CSS colour, else None (a ship's ``url(...)`` is dropped)."""
+    value = value.strip() if isinstance(value, str) else ""
+    return value if _COLOR.fullmatch(value) else None
+
+
+def safe_avatar(value) -> str | None:
+    """Only a size-capped ``data:image/(png|jpeg|webp|svg+xml);base64`` URL; http(s) is dropped so
+    the page never fetches an address a ship chose."""
+    if isinstance(value, str) and len(value) <= _AVATAR_URL_CAP and _AVATAR.fullmatch(value):
+        return value
+    return None
+
+
+def clean_crew(entries) -> list[dict]:
+    """Crew rows as the page may show them: at most ``MAX_CREW`` mappings, name and id cut to
+    size, colour and avatar passed through ``safe_color`` / ``safe_avatar``."""
+    out = []
+    for bot in entries if isinstance(entries, (list, tuple)) else []:
+        if not isinstance(bot, Mapping):
+            continue
+        row = dict(bot)
+        row["id"] = str(row.get("id") or "")[:160]
+        row["name"] = str(row.get("name") or row["id"])[:NAME_CAP]
+        row["color"] = safe_color(row.get("color"))
+        row["avatar"] = safe_avatar(row.get("avatar"))
+        out.append(row)
+        if len(out) >= MAX_CREW:
+            break
+    return out
 
 
 def load_yaml(path: Path) -> dict:
@@ -81,7 +120,7 @@ def identity(profile_id: str, profile_dir: Path, *, load=load_yaml) -> dict:
     color = bots.get("color")
     fallback = "Hermes" if profile_id == "default" else profile_id
     return {"id": profile_id, "name": title or fallback,
-            "color": color.strip() if isinstance(color, str) and color.strip() else None,
+            "color": safe_color(color),
             "avatar": avatar_data_url(Path(profile_dir)), "named": bool(title)}
 
 

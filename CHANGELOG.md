@@ -2,6 +2,37 @@
 
 All notable changes to Flota. Versions follow `plugin.yaml`.
 
+## 0.2.1 — 2026-11-11
+
+### Added
+
+- `hermes flota setup USER@HOST`: the machine name is taken from the host.
+- `hermes flota remove <machine> [--force] [--keep-profile]`: forget a machine and delete the `flota-*` profile Flota created for it.
+- `hermes flota uninstall [--yes]`: lists, then undoes, what Flota did on this machine (machines, Flota-made profiles, `flota-flagship:` key lines) before `hermes plugins remove flota`.
+- `hermes flota add-ship <code> --replace`, and "This machine really moved - replace it" on the page.
+- Bare `hermes flota` prints where this Hermes stands and the next command; commands end with a `Next:` hint. `invite` and `join` print paste-ready `hermes flota join ...` / `hermes flota add-ship ...` lines.
+- `/flota sleep|off <machine> force` for a person in a chat.
+- Flota page: choose among several connections that run Flota; opening the flagship automatically is opt-in and can be turned off in the header; optional ship name when adding by code; the Wake-on-LAN MAC is detected over SSH.
+
+### Changed
+
+- The agent tool has no `force` option any more: a busy machine is always refused for the model. Only a person can force it (CLI, `/flota ... force`, the page).
+- A machine with `wake: none` (and no `wake_timer`) defaults to `sleep: none`: Flota no longer auto-sleeps what it can't turn on again.
+- REST API: every POST must be `application/json` (415 otherwise); `GET /invite` is read-only and `POST /invite` mints; `POST /join` needs `confirm` (flagship name or key fingerprint); `POST /ships` accepts `name` and `replace`; sleep/off take `{"force": true}` in the body.
+- `setup` on a machine that doesn't answer says `Saved ... but NOT verified`; invalid input exits 2 with `Nothing was written.`
+
+### Fixed
+
+- Idle watch: a machine woken by the tool, `/flota wake`, its wake timer, or left busy by a gateway that restarted (picked up on the first delegation) now goes back to sleep after a full `sleep_after`, never while busy.
+- A `default` machine is also woken for tasks that name no machine.
+- A failed auto-sleep is retried once.
+- The SSH file sync guard covers any configured machine profile, not only `flota-*` names.
+- Hosts and users starting with `-` are rejected everywhere.
+- A ship code can no longer silently re-point an existing machine to a new address or user.
+- Crew data returned by ships is sanitised before it reaches the page.
+- `leave` removes stray `flota-flagship:` key lines even when no fleet is recorded.
+- Docs: install-scan output, the Windows undo steps, the README screenshot caption and the CLI reference now match the code.
+
 ## 0.2.0 — 2026-11-10
 
 ### Added

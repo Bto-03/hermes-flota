@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from flota_plugin import detect
 from flota_plugin.machines import Machine
 
-M = Machine(name="escritorio", profile="flota-escritorio", host="192.0.2.28", user="alice")
+M = Machine(name="studio", profile="flota-studio", host="192.0.2.28", user="alice")
 
 LINUX_OUT = """\
 if=enp8s0

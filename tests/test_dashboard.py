@@ -122,20 +122,20 @@ def test_status_shows_busy_counts_from_the_gateway(env):
 @pytest.mark.parametrize("path, action", [("sleep", "suspend"), ("off", "poweroff")])
 def test_a_busy_machine_is_refused_unless_forced(env, path, action):
     env.busy["counts"] = {"torre": 2}
-    response = env.client.post(f"/api/plugins/flota/{path}/torre")
+    response = env.client.post(f"/api/plugins/flota/{path}/torre", json={})
     assert response.status_code == 409
     assert response.json()["detail"].startswith("torre is busy with 2 subagent(s)")
     assert not [c for c in env.calls if c[0] == "power"]
-    response = env.client.post(f"/api/plugins/flota/{path}/torre?force=1")
+    response = env.client.post(f"/api/plugins/flota/{path}/torre?force=1", json={})
     assert response.status_code == 200 and ("power", "torre", action) in env.calls
 
 
 def test_power_off_switch_is_checked_before_busy(env):
     env.panel()["allow_power_off"] = False
     env.busy["counts"] = {"torre": 1, "mini": 1}
-    assert env.client.post("/api/plugins/flota/off/torre").status_code == 403
+    assert env.client.post("/api/plugins/flota/off/torre", json={}).status_code == 403
     env.panel()["allow_power_off"] = True
-    assert env.client.post("/api/plugins/flota/off/mini").status_code == 403
+    assert env.client.post("/api/plugins/flota/off/mini", json={}).status_code == 403
 
 
 def test_status_reports_config_problems(env):
@@ -269,11 +269,11 @@ def test_wake_runs_in_the_background_and_status_shows_it(env, monkeypatch):
         return 12.0
 
     monkeypatch.setattr(wake, "ensure_ready", ensure)
-    response = env.client.post("/api/plugins/flota/wake/torre")
+    response = env.client.post("/api/plugins/flota/wake/torre", json={})
     assert response.status_code == 202 and response.json()["state"] == "waking"
     assert _by_name(env.client.get("/api/plugins/flota/status").json())["torre"]["waking"] is True
     # A second click while it is waking does not start another wake.
-    assert env.client.post("/api/plugins/flota/wake/torre").status_code == 202
+    assert env.client.post("/api/plugins/flota/wake/torre", json={}).status_code == 202
     release.set()
     env.api._wakes["torre"]["thread"].join(5)
     env.up["10.0.0.5"] = True
@@ -287,7 +287,7 @@ def test_wake_failure_is_shown_in_status(env, monkeypatch):
         raise wake.WakeError("torre did not come up within 90s of being woken")
 
     monkeypatch.setattr(wake, "ensure_ready", ensure)
-    env.client.post("/api/plugins/flota/wake/torre")
+    env.client.post("/api/plugins/flota/wake/torre", json={})
     env.api._wakes["torre"]["thread"].join(5)
     torre = _by_name(env.client.get("/api/plugins/flota/status").json())["torre"]
     assert torre["waking"] is False and "did not come up" in torre["wake_error"]
@@ -295,28 +295,28 @@ def test_wake_failure_is_shown_in_status(env, monkeypatch):
 
 def test_unknown_machine_is_404(env):
     for path in ("wake", "sleep", "off"):
-        assert env.client.post(f"/api/plugins/flota/{path}/nope").status_code == 404
+        assert env.client.post(f"/api/plugins/flota/{path}/nope", json={}).status_code == 404
 
 
 def test_sleep_uses_the_machine_sleep_action(env):
-    response = env.client.post("/api/plugins/flota/sleep/torre")
+    response = env.client.post("/api/plugins/flota/sleep/torre", json={})
     assert response.status_code == 200
     assert response.json() == {"ok": True, "result": "torre: suspend sent"}
     assert ("power", "torre", "suspend") in env.calls
     # `sleep: none` only disables auto-sleep; a manual sleep still suspends.
-    env.client.post("/api/plugins/flota/sleep/mini")
+    env.client.post("/api/plugins/flota/sleep/mini", json={})
     assert ("power", "mini", "suspend") in env.calls
 
 
 def test_sleep_failure_is_not_ok(env, monkeypatch):
     monkeypatch.setattr(power, "power", lambda m, a: f"{m.name}: {a} failed: exit 1: denied")
-    response = env.client.post("/api/plugins/flota/sleep/torre")
+    response = env.client.post("/api/plugins/flota/sleep/torre", json={})
     assert response.status_code == 502 and "denied" in response.json()["detail"]
 
 
 def test_power_off_needs_the_panel_switch(env):
     env.panel()["allow_power_off"] = False
-    response = env.client.post("/api/plugins/flota/off/torre")
+    response = env.client.post("/api/plugins/flota/off/torre", json={})
     assert response.status_code == 403 and "Allow power off" in response.json()["detail"]
     assert not [c for c in env.calls if c[0] == "power"]
     data = env.client.get("/api/plugins/flota/status").json()
@@ -325,12 +325,12 @@ def test_power_off_needs_the_panel_switch(env):
     assert "Allow power off" in _by_name(data)["torre"]["power_off_reason"]
     env.panel()["allow_power_off"] = True
     assert env.client.get("/api/plugins/flota/status").json()["allow_power_off"] is True
-    response = env.client.post("/api/plugins/flota/off/torre")
+    response = env.client.post("/api/plugins/flota/off/torre", json={})
     assert response.status_code == 200 and ("power", "torre", "poweroff") in env.calls
 
 
 def test_power_off_is_refused_for_a_machine_without_a_wake_method(env):
-    response = env.client.post("/api/plugins/flota/off/mini")
+    response = env.client.post("/api/plugins/flota/off/mini", json={})
     assert response.status_code == 403 and response.json()["detail"] == NO_WAKE_MINI
     assert not [c for c in env.calls if c[0] == "power"]
 
@@ -443,6 +443,9 @@ def test_bundle_registers_and_parses():
     assert "__HERMES_SESSION_TOKEN__" not in source
     assert "Busy — sleep anyway?" in source and "?force=1" in source  # 409 busy: confirm, then force
     assert "busy_known" in source and "cannot see subagents" not in source.replace("\n", " ")
+    assert '{ force: true }' in source and '"{}"' in source  # every POST carries a JSON body (the API demands it)
+    assert "can_power_off" in source and "document.hidden" in source and "loading.current" in source
+    assert "lives in the Flota page of Hermes Desktop" in source
     node = shutil.which("node") or "node"
     if not Path(node).exists():
         pytest.skip("node not installed")
@@ -455,17 +458,17 @@ def test_bundle_registers_and_parses():
 
 
 def test_status_has_crews_and_role(env, monkeypatch, tmp_path):
-    hub = tmp_path / "asistente"
+    hub = tmp_path / "aide"
     hub.mkdir()
     (hub / "profile.yaml").write_text("ui_meta:\n  hermes-bots:\n    title: Hermes\n    color: red\n")
     flota = tmp_path / "flota-torre"
     flota.mkdir()
-    monkeypatch.setattr(env.api, "_crew_profiles", lambda: [("asistente", hub), ("flota-torre", flota)])
+    monkeypatch.setattr(env.api, "_crew_profiles", lambda: [("aide", hub), ("flota-torre", flota)])
     env.store[ACTIVE]["plugins"]["entries"]["flota"]["settings"]["machines"]["mini"]["crew_names"] = ["Lia"]
     env.busy["counts"] = {"mini": 1}
     data = env.client.get("/api/plugins/flota/status").json()
     assert data["role"] == "flagship"
-    assert data["hub_crew"] == [{"id": "asistente", "name": "Hermes", "avatar": None, "color": "red",
+    assert data["hub_crew"] == [{"id": "aide", "name": "Hermes", "avatar": None, "color": "red",
                                  "state": "asleep"}]
     rows = {m["name"]: m for m in data["machines"]}
     assert [(b["id"], b["state"]) for b in rows["torre"]["crew"]] == [("flota-torre", "asleep")]
@@ -477,9 +480,9 @@ def test_status_has_crews_and_role(env, monkeypatch, tmp_path):
 def test_status_merges_the_bots_scanned_on_each_ship(env, monkeypatch):
     env.store[ACTIVE]["plugins"]["entries"]["flota"]["settings"]["machines"]["mini"]["crew_names"] = ["Hermes", "Lia"]
     scans = {"mini": {"hostname": "desk-pc", "bots": [
-        {"id": "asistente", "name": "Hermes", "color": "red", "avatar_b64": "UE5H", "mime": "image/png",
+        {"id": "aide", "name": "Hermes", "color": "red", "avatar_b64": "UE5H", "mime": "image/png",
          "gateway_alive": True, "active_agents": 0},
-        {"id": "default", "name": "escriotrio", "color": None, "avatar_b64": None, "mime": None,
+        {"id": "default", "name": "deckhand", "color": None, "avatar_b64": None, "mime": None,
          "gateway_alive": False, "active_agents": 0}]},
              "torre": {"hostname": "torre", "bots": [{"id": "x", "name": "X", "color": None, "avatar_b64": None,
                                                      "mime": None, "gateway_alive": True, "active_agents": 1}]}}
@@ -493,8 +496,8 @@ def test_status_merges_the_bots_scanned_on_each_ship(env, monkeypatch):
     assert sorted(seen) == [("mini", True), ("torre", False)]
     assert rows["mini"]["hostname"] == "desk-pc" and rows["torre"]["hostname"] == "torre"
     assert [(b["id"], b["name"], b["state"]) for b in rows["mini"]["crew"]] == [
-        ("flota-mini", "mini", "awake"), ("mini/Lia", "Lia", "awake"), ("mini/asistente", "Hermes", "awake"),
-        ("mini/default", "escriotrio", "asleep")]
+        ("flota-mini", "mini", "awake"), ("mini/Lia", "Lia", "awake"), ("mini/aide", "Hermes", "awake"),
+        ("mini/default", "deckhand", "asleep")]
     hermes = rows["mini"]["crew"][2]
     assert hermes["remote"] is True and hermes["machine"] == "mini" and hermes["avatar"] == "data:image/png;base64,UE5H"
     assert [(b["id"], b["state"]) for b in rows["torre"]["crew"]] == [("flota-torre", "asleep"), ("torre/x", "asleep")]
@@ -590,17 +593,42 @@ def test_add_machine_setup_failure_and_timeout(env, monkeypatch):
     assert env.client.post("/api/plugins/flota/machines", json={"name": "x", "host": "h", "setup": "yes"}).status_code == 400
 
 
+def _invite_code(flagship="f"):
+    return pairing.encode(pairing.INVITE_PREFIX, {"v": 1, "flagship": flagship, "user": "u", "nonce": "n" * 16,
+                                                  "pubkey": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGJ1bGs", "exp": 4102444800})
+
+
 def test_pairing_endpoints(env, monkeypatch):
-    monkeypatch.setattr(cli, "run_invite", lambda: {"code": "FLOTA1-INVITE-x", "expires_at": "t", "flagship": "f"})
-    assert env.client.get("/api/plugins/flota/invite").json()["code"] == "FLOTA1-INVITE-x"
+    minted = []
+
+    def run_invite():
+        minted.append(1)
+        return {"code": "FLOTA1-INVITE-x", "expires_at": "t", "flagship": "f"}
+    monkeypatch.setattr(cli, "run_invite", run_invite)
+    monkeypatch.setattr(cli, "_invites_store", lambda: Path("/fake-home/flota/invites.json"))
+    # GET never mints: nothing yet, then the invite POST made.
+    assert env.client.get("/api/plugins/flota/invite").json()["code"] is None and not minted
+    assert env.client.post("/api/plugins/flota/invite", json={}).json()["code"] == "FLOTA1-INVITE-x"
+    assert env.client.get("/api/plugins/flota/invite").json()["code"] == "FLOTA1-INVITE-x" and minted == [1]
+
+    good = _invite_code()
+    joined = []
 
     def join(code):
-        if code != "good":
-            raise pairing.PairingError("this invite has expired")
+        joined.append(code)
         return {"ship_code": "FLOTA1-SHIP-y", "lines": ["ok"]}
     monkeypatch.setattr(cli, "run_join", join)
-    assert env.client.post("/api/plugins/flota/join", json={"code": "good"}).json()["ship_code"] == "FLOTA1-SHIP-y"
-    r = env.client.post("/api/plugins/flota/join", json={"code": "old"})
+    # No confirmation, or the wrong one: nothing is trusted, the reply says what to confirm.
+    for body in ({"code": good}, {"code": good, "confirm": "other"}, {"code": good, "confirm": True}):
+        r = env.client.post("/api/plugins/flota/join", json=body)
+        assert r.status_code == 409 and r.json()["needs"] == "confirm" and r.json()["flagship"] == "f"
+        assert r.json()["pubkey_fingerprint"].startswith("SHA256:") and not joined
+    fp = r.json()["pubkey_fingerprint"]
+    assert env.client.post("/api/plugins/flota/join", json={"code": good, "confirm": "f"}).json()["ship_code"] == "FLOTA1-SHIP-y"
+    assert env.client.post("/api/plugins/flota/join", json={"code": good, "confirm": fp}).status_code == 200
+    assert joined == [good, good]
+    r = env.client.post("/api/plugins/flota/join", json={"code": pairing.encode(pairing.INVITE_PREFIX, {
+        "v": 1, "flagship": "f", "nonce": "n" * 16, "pubkey": "ssh-ed25519 AAAA", "exp": 1}), "confirm": "f"})
     assert r.status_code == 400 and "expired" in r.json()["detail"]
     assert env.client.post("/api/plugins/flota/join", json={}).status_code == 400
     assert env.client.post("/api/plugins/flota/join", json={"code": "x" * 9000}).status_code == 400
@@ -644,9 +672,9 @@ def test_ships_endpoint_passes_a_name_override(env, monkeypatch):
         return {"ok": True, "lines": [], "problems": [], "machine": name or "desk-pc"}
     monkeypatch.setattr(cli, "run_add_ship", add)
     assert env.client.post("/api/plugins/flota/ships",
-                           json={"ship_code": code, "name": " escritorio "}).json()["machine"] == "escritorio"
+                           json={"ship_code": code, "name": " studio "}).json()["machine"] == "studio"
     assert env.client.post("/api/plugins/flota/ships", json={"ship_code": code, "name": ""}).status_code == 200
-    assert seen == ["escritorio", None]
+    assert seen == ["studio", None]
     for bad in ("Bad Name", "-x", 7):
         assert env.client.post("/api/plugins/flota/ships", json={"ship_code": code, "name": bad}).status_code == 400
 
@@ -770,7 +798,7 @@ def test_join_when_already_in_a_fleet_is_409(env, monkeypatch):
     def join(code):
         raise cli.AlreadyInFleet({"flagship": "servidor", "joined_at": "t"})
     monkeypatch.setattr(cli, "run_join", join)
-    r = env.client.post("/api/plugins/flota/join", json={"code": "FLOTA1-INVITE-x"})
+    r = env.client.post("/api/plugins/flota/join", json={"code": _invite_code("otro"), "confirm": "otro"})
     assert r.status_code == 409
     assert r.json() == {"error": "already in a fleet", "fleet": {"flagship": "servidor", "joined_at": "t"},
                         "detail": r.json()["detail"]}
@@ -791,3 +819,69 @@ def test_join_check_passes_wake_options_through(env, monkeypatch):
     monkeypatch.setattr(cli, "join_check", lambda: {"checks": [], "addresses": {}, "os": "linux",
                                                      "wake_options": [{"id": "none", "ok": True, "label": "x"}]})
     assert env.client.get("/api/plugins/flota/join/check").json()["wake_options"][0]["id"] == "none"
+
+
+# --- hardening: no cross-site "simple" request changes anything ----------------------------------
+
+@pytest.mark.parametrize("path", ["wake/torre", "sleep/torre", "off/torre", "sleep/torre?force=1", "invite", "role",
+                                  "machines", "join", "ships"])
+def test_posts_need_a_json_content_type(env, path):
+    """A form or text/plain POST (what another site can send without a preflight) is refused."""
+    url = f"/api/plugins/flota/{path}"
+    assert env.client.post(url).status_code == 415
+    assert env.client.post(url, content="{}", headers={"content-type": "text/plain"}).status_code == 415
+    assert env.client.post(url, data={"force": "1"}).status_code == 415
+    assert env.calls == []
+
+
+def test_force_travels_in_the_json_body(env):
+    env.busy["counts"] = {"torre": 1}
+    assert env.client.post("/api/plugins/flota/sleep/torre", json={"force": False}).status_code == 409
+    assert env.client.post("/api/plugins/flota/sleep/torre", json={"force": True}).status_code == 200
+    assert env.client.post("/api/plugins/flota/sleep/torre", json={"force": "yes"}).status_code == 400
+
+
+def test_status_sanitises_what_ships_say_about_their_bots(env, monkeypatch):
+    api = env.api
+    bots = [{"id": "torre/evil", "name": "N" * 500, "color": "url(//evil.example/b.png)",
+             "avatar": "https://evil.example/a.png", "state": "awake", "remote": True}] + [
+        {"id": f"torre/b{i}", "name": f"b{i}", "color": "#ff8800", "avatar": "data:image/png;base64,UE5H",
+         "state": "awake", "remote": True} for i in range(200)]
+    remote = api._mod("remote_crew")
+    monkeypatch.setattr(remote, "crew_entries", lambda machine, scan, up: bots if machine.name == "torre" else [])
+    crew = _by_name(env.client.get("/api/plugins/flota/status").json())["torre"]["crew"]
+    assert len(crew) <= api._mod("crew").MAX_CREW
+    evil = [b for b in crew if b["id"] == "torre/evil"][0]
+    assert evil["color"] is None and evil["avatar"] is None and len(evil["name"]) == 64
+    ok = [b for b in crew if b["id"] == "torre/b0"][0]
+    assert ok["color"] == "#ff8800" and ok["avatar"] == "data:image/png;base64,UE5H"
+
+
+def test_setup_without_wake_lets_setup_detect_it_and_reports_what_it_found(env, monkeypatch):
+    seen = {}
+
+    def fake_setup(params, emit=None):
+        seen["wake"] = params.wake
+        return 0, ["✓ done"]
+    monkeypatch.setattr(cli, "run_setup", fake_setup)
+    r = env.client.post("/api/plugins/flota/machines", json={"name": "nueva", "host": "10.0.0.9", "user": "u", "setup": True})
+    assert r.status_code == 200 and seen["wake"] is None
+    assert r.json()["wake"] == "none" and "mac" in r.json()
+
+
+def test_ships_endpoint_passes_replace_only_when_true(env, monkeypatch):
+    code = pairing.encode(pairing.SHIP_PREFIX, {"v": 1, "name": "torre"})
+    seen = []
+
+    def add(c, emit=None, name=None, replace=False):
+        seen.append(replace)
+        if not replace:
+            raise pairing.PairingError("saved as a@b. run it again with --replace (hermes flota add-ship <code> --replace)")
+        return {"ok": True, "lines": [], "problems": [], "machine": "torre"}
+    monkeypatch.setattr(cli, "run_add_ship", add)
+    url = "/api/plugins/flota/ships"
+    r = env.client.post(url, json={"ship_code": code})
+    assert r.status_code == 400 and "--replace" in r.json()["detail"]
+    assert env.client.post(url, json={"ship_code": code, "replace": "yes"}).status_code == 400
+    assert env.client.post(url, json={"ship_code": code, "replace": True}).json()["ok"] is True
+    assert seen == [False, True]

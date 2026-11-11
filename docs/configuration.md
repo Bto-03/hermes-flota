@@ -87,8 +87,8 @@ Each entry under `machines.<name>` describes one machine. Flota validates every 
 | `wake_timer` | bool | `false` | Also arm the machine's own RTC wake alarm before it suspends. With `wake: none`, this turns wake into `timer`. |
 | `timer_lead` | duration | `120s` | How early before the next cron job the wake timer fires. Never less than 60 s from the moment of sleeping. |
 | `fallback` | machine name | `""` | Tried once if this machine won't wake. Must be another loaded machine; the fallback's own fallback is never followed. |
-| `sleep` | `none` \| `suspend` \| `hibernate` \| `poweroff` | panel `sleep_action` | What auto-sleep and `sleep` do. `none` means never auto-sleep. macOS can't hibernate on demand, so `hibernate` becomes `suspend` there. `poweroff` becomes `suspend` unless power-off is allowed for this machine. |
-| `sleep_after` | duration | panel `sleep_after` | Idle time after the last subagent before auto-sleep. `0` disables auto-sleep for this machine. Needs `sleep` or `sleep_command`. |
+| `sleep` | `none` \| `suspend` \| `hibernate` \| `poweroff` | panel `sleep_action`; `none` for a machine with `wake: none` and no `wake_timer` | What auto-sleep and `sleep` do. `none` means never auto-sleep. macOS can't hibernate on demand, so `hibernate` becomes `suspend` there. `poweroff` becomes `suspend` unless power-off is allowed for this machine. |
+| `sleep_after` | duration | panel `sleep_after` | Idle time with no subagents before auto-sleep (after the last subagent, or after a wake with none). `0` disables auto-sleep for this machine. Needs `sleep` or `sleep_command`. |
 | `sleep_command` | shell command | `""` | Runs on the Hermes host instead of the SSH power command, for the machine's default action. Only settable in `config.yaml`. |
 | `power_prefix` | string | `""` | Prepended to `systemctl <action>` on Linux. `setup` writes it when suspend works only inside a niri session. Only settable in `config.yaml` or by `setup`. |
 | `alt_hosts` | list | — | Written by `add-ship`: the ship's other addresses. Used to recognise the same ship when it's added again. |

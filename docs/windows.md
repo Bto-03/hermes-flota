@@ -42,6 +42,9 @@ profiles but only Tailscale addresses (100.64.0.0/10):
 New-NetFirewallRule -Name FlotaSSH -DisplayName "Flota SSH (Tailscale only)" -Direction Inbound -Protocol TCP -LocalPort 22 -RemoteAddress 100.64.0.0/10 -Profile Any -Action Allow
 ```
 
+`hermes flota join` / `join-check` on Windows print a similar rule named `flota-ssh` (Tailscale and
+the local subnet). Create one or the other, not both; section 8 removes either by its exact name.
+
 Optional, to make SSH reachable from the tailnet *only* (the OpenSSH installer opens port 22 to
 everyone on its own rule):
 
@@ -51,14 +54,16 @@ Disable-NetFirewallRule -Name OpenSSH-Server-In-TCP
 
 ## 3. The flagship's key
 
-Take the flagship's public key (one line starting with
-`ssh-ed25519`). Use `Add-Content`, never `echo ... >`: in Windows PowerShell 5.1 `>` writes UTF-16,
+Skip this step if you pair with `hermes flota join` on a non-admin account: `join` writes the key for
+you. Otherwise take the flagship's public key (one line starting with `ssh-ed25519`) and end the line
+with the same comment `join` uses, `flota-flagship:` plus the flagship's name (here `flagship`), so
+section 8 can find exactly that line. Use `Add-Content`, never `echo ... >`: in Windows PowerShell 5.1 `>` writes UTF-16,
 which sshd cannot read.
 
 ### 3a. Admin account *(admin)*
 
 ```powershell
-Add-Content -Path "C:\ProgramData\ssh\administrators_authorized_keys" -Value "ssh-ed25519 AAAA...paste-the-key... flota"
+Add-Content -Path "C:\ProgramData\ssh\administrators_authorized_keys" -Value "ssh-ed25519 AAAA...paste-the-key... flota-flagship:flagship"
 icacls.exe "C:\ProgramData\ssh\administrators_authorized_keys" /inheritance:r /grant "*S-1-5-32-544:F" /grant "*S-1-5-18:F"
 ```
 
@@ -69,11 +74,11 @@ The SIDs are Administrators and SYSTEM; they work on any Windows language (the g
 
 ```powershell
 New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.ssh"
-Add-Content -Path "$env:USERPROFILE\.ssh\authorized_keys" -Value "ssh-ed25519 AAAA...paste-the-key... flota"
+Add-Content -Path "$env:USERPROFILE\.ssh\authorized_keys" -Value "ssh-ed25519 AAAA...paste-the-key... flota-flagship:flagship"
 icacls.exe "$env:USERPROFILE\.ssh\authorized_keys" /inheritance:r /grant "${env:USERNAME}:F" /grant "*S-1-5-18:F"
 ```
 
-Test from the flagship: `ssh USER@100.x.y.z ver` must print `Microsoft Windows [...]` without asking
+Test from the flagship: `ssh alice@desk.example.ts.net ver` must print `Microsoft Windows [...]` without asking
 for a password.
 
 ## 4. Tailscale
@@ -88,14 +93,15 @@ Log in from the tray icon, then:
 tailscale ip -4
 ```
 
-That 100.x address is the ship's `host`. In the Tailscale tray menu enable *Run unattended* so the
+That `100.x` address (or its MagicDNS name, such as `desk.example.ts.net`) is the ship's `host`. In the Tailscale tray menu enable *Run unattended* so the
 tailnet stays up when nobody is logged in.
 
 ## 5. Sleep
 
 Flota suspends with `SetSuspendState('Suspend', 0, 0)` (the last 0 keeps wake events enabled, which
 the wake timer needs) and hibernates with `shutdown /h`. The logged-in user may do both over SSH; no
-admin. Check what this PC supports:
+admin. Check what this PC supports, and **write down whether `Hibernate` is listed as available**
+before you change anything (section 8 needs it):
 
 ```powershell
 powercfg /a
@@ -149,14 +155,14 @@ Get-ScheduledTask -TaskName FlotaWake | Get-ScheduledTaskInfo
 
 ## 7. Ship settings on the flagship
 
-Run `hermes flota setup escritorio --host 100.x.y.z --user alice --os windows` on the flagship, or
+Run `hermes flota setup desk --host desk.example.ts.net --user alice --os windows` on the flagship, or
 pair with codes ([pairing.md](pairing.md)). The resulting entry under
 `plugins.entries.flota.settings.machines` looks like this; add the wake-timer keys by hand:
 
 ```yaml
-escritorio:
-  profile: flota-escritorio   # hermes flota setup creates it
-  host: 100.x.y.z
+desk:
+  profile: flota-desk   # hermes flota setup creates it
+  host: desk.example.ts.net
   user: alice
   os: windows
   wake: timer        # or wol/wol_via + wake_timer: true
@@ -166,21 +172,25 @@ escritorio:
 
 ## 8. Undo everything
 
-Run only the lines for steps you did. *(admin)* for all but the last block.
+The first block removes **only what Flota or this checklist added**. Run only the lines for steps
+you did; *(admin)* for all but the `$env:USERPROFILE` line. On the flagship, `hermes flota remove desk`
+forgets the ship.
+
+If this PC joined with `hermes flota join`, run `hermes flota leave` first (or `hermes flota
+uninstall --yes`): it removes the key lines whose comment starts with `flota-flagship:` from your
+`authorized_keys`. The two `Get-Content` lines below do the same by hand, also in the admin file,
+which `leave` doesn't touch; every other key stays.
 
 ```powershell
 Unregister-ScheduledTask -TaskName FlotaWake -Confirm:$false
 Remove-NetFirewallRule -Name FlotaSSH
+Remove-NetFirewallRule -Name flota-ssh
 Enable-NetFirewallRule -Name OpenSSH-Server-In-TCP
-Stop-Service sshd
-Set-Service -Name sshd -StartupType Disabled
-Remove-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
-(Get-Content "C:\ProgramData\ssh\administrators_authorized_keys") | Where-Object { $_ -notmatch ' flota$' } | Set-Content "C:\ProgramData\ssh\administrators_authorized_keys"
-powercfg /hibernate off
+(Get-Content "C:\ProgramData\ssh\administrators_authorized_keys") | Where-Object { $_ -notmatch ' flota-flagship:' } | Set-Content "C:\ProgramData\ssh\administrators_authorized_keys"
+(Get-Content "$env:USERPROFILE\.ssh\authorized_keys") | Where-Object { $_ -notmatch ' flota-flagship:' } | Set-Content "$env:USERPROFILE\.ssh\authorized_keys"
 ```
 
-The `Get-Content` line removes only the key you added in step 3a (the line ending in ` flota`); other
-administrators' keys stay. Delete the whole file only if Flota's key was the only line in it.
+(`Remove-NetFirewallRule` prints an error for a rule you never created; that's harmless.)
 
 Wake timers back to what you noted in step 6 (replace 0 with your values; 0 = off, 1 = on, 2 =
 important only):
@@ -191,16 +201,26 @@ powercfg /setdcvalueindex SCHEME_CURRENT SUB_SLEEP RTCWAKE 0
 powercfg /setactive SCHEME_CURRENT
 ```
 
-Non-admin key and Tailscale (no admin):
+### Optional, destructive: only if nothing else on this PC uses them
+
+> ⚠ These remove things that existed before Flota or that other software and users may rely on.
+> Read each line before running it.
 
 ```powershell
-(Get-Content "$env:USERPROFILE\.ssh\authorized_keys") | Where-Object { $_ -notmatch ' flota$' } | Set-Content "$env:USERPROFILE\.ssh\authorized_keys"
+# Only if Hibernate was NOT available in `powercfg /a` before step 5 (also turns Fast Startup off) (admin)
+powercfg /hibernate off
+# Only if you installed OpenSSH Server for Flota and nobody else uses SSH on this PC (admin)
+Stop-Service sshd
+Set-Service -Name sshd -StartupType Disabled
+Remove-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+# Only if you installed Tailscale for Flota
 tailscale logout
 winget uninstall --id Tailscale.Tailscale -e
 ```
 
-`Remove-WindowsCapability` keeps `C:\ProgramData\ssh` (host keys, config); delete that folder too
-for a clean slate: `Remove-Item -Recurse C:\ProgramData\ssh`.
+`Remove-WindowsCapability` keeps `C:\ProgramData\ssh` (host keys, config, other administrators'
+keys). Delete that folder too for a clean slate, but only if no other administrator's key lives in
+it: `Remove-Item -Recurse C:\ProgramData\ssh`.
 
 ## Other OSes, for comparison
 

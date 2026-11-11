@@ -15,7 +15,7 @@ NOW = 1_800_000_000.0  # a fixed wall clock
 
 
 def machine(**kw):
-    return Machine(**{"name": "escritorio", "profile": "p", "host": "203.0.113.7", "user": "carol",
+    return Machine(**{"name": "studio", "profile": "p", "host": "203.0.113.7", "user": "carol",
                       "wake": "timer", "sleep": "suspend", **kw})
 
 
@@ -23,7 +23,7 @@ def iso(epoch):
     return datetime.fromtimestamp(epoch, timezone.utc).isoformat()
 
 
-def job(name="backup nocturno", prompt="run the backup on escritorio", at=NOW + 3600, **kw):
+def job(name="backup nocturno", prompt="run the backup on studio", at=NOW + 3600, **kw):
     return {"name": name, "prompt": prompt, "next_run_at": iso(at) if isinstance(at, float) else at,
             "enabled": True, **kw}
 
@@ -62,61 +62,61 @@ def state(tmp_path):
 # --- next_wake_for -----------------------------------------------------------------------------
 
 def test_no_jobs_means_no_wake():
-    assert wt.next_wake_for("escritorio", [], now=NOW) is None
-    assert wt.next_wake_for("escritorio", None, now=NOW) is None
+    assert wt.next_wake_for("studio", [], now=NOW) is None
+    assert wt.next_wake_for("studio", None, now=NOW) is None
 
 
 def test_wakes_the_lead_time_before_the_next_job_that_names_the_machine():
-    assert wt.next_wake_for("escritorio", [job()], now=NOW) == NOW + 3600 - 120
+    assert wt.next_wake_for("studio", [job()], now=NOW) == NOW + 3600 - 120
 
 
 def test_custom_lead_time():
-    assert wt.next_wake_for("escritorio", [job()], lead=600, now=NOW) == NOW + 3600 - 600
+    assert wt.next_wake_for("studio", [job()], lead=600, now=NOW) == NOW + 3600 - 600
 
 
 def test_soonest_matching_job_wins():
     jobs = [job(at=NOW + 7200), job(at=NOW + 1800), job(prompt="other", at=NOW + 600)]
-    assert wt.next_wake_for("escritorio", jobs, now=NOW) == NOW + 1800 - 120
+    assert wt.next_wake_for("studio", jobs, now=NOW) == NOW + 1800 - 120
 
 
 def test_paused_and_disabled_jobs_are_ignored():
     jobs = [job(enabled=False, at=NOW + 600), job(state="paused", at=NOW + 900), job(at=NOW + 5000)]
-    assert wt.next_wake_for("escritorio", jobs, now=NOW) == NOW + 5000 - 120
+    assert wt.next_wake_for("studio", jobs, now=NOW) == NOW + 5000 - 120
 
 
 def test_job_for_another_machine_is_ignored():
     jobs = [job(name="x", prompt="clean torre"), job(name="y", prompt="z", machine="torre"),
-            job(name="z", prompt="escritorios are furniture")]  # whole word only
-    assert wt.next_wake_for("escritorio", jobs, now=NOW) is None
+            job(name="z", prompt="studios are furniture")]  # whole word only
+    assert wt.next_wake_for("studio", jobs, now=NOW) is None
 
 
 def test_explicit_machine_fields_and_skills_match():
-    assert wt.next_wake_for("escritorio", [job(name="a", prompt="b", machine="escritorio")], now=NOW)
-    assert wt.next_wake_for("escritorio", [job(name="a", prompt="b", machines=["torre", "escritorio"])],
+    assert wt.next_wake_for("studio", [job(name="a", prompt="b", machine="studio")], now=NOW)
+    assert wt.next_wake_for("studio", [job(name="a", prompt="b", machines=["torre", "studio"])],
                             now=NOW)
-    assert wt.next_wake_for("escritorio", [job(name="a", prompt="b", skills=["escritorio-backup"])],
+    assert wt.next_wake_for("studio", [job(name="a", prompt="b", skills=["studio-backup"])],
                             now=NOW)
-    assert wt.next_wake_for("Escritorio", [job(prompt="ESCRITORIO: update")], now=NOW)
+    assert wt.next_wake_for("Studio", [job(prompt="STUDIO: update")], now=NOW)
 
 
 def test_past_and_missing_run_times_are_ignored():
     jobs = [job(at=NOW - 60), job(at=None), job(at="not a date"), job(at=NOW)]
-    assert wt.next_wake_for("escritorio", jobs, now=NOW) is None
+    assert wt.next_wake_for("studio", jobs, now=NOW) is None
 
 
 def test_a_job_due_within_the_lead_time_wakes_as_soon_as_possible():
-    assert wt.next_wake_for("escritorio", [job(at=NOW + 90)], now=NOW) == NOW + wt.MIN_AHEAD
+    assert wt.next_wake_for("studio", [job(at=NOW + 90)], now=NOW) == NOW + wt.MIN_AHEAD
 
 
 def test_epoch_and_naive_local_run_times_are_understood():
     naive = datetime.fromtimestamp(NOW + 3600).replace(microsecond=0).isoformat()  # local, no tz
-    assert wt.next_wake_for("escritorio", [job(at=naive)], now=NOW) == NOW + 3600 - 120
-    assert wt.next_wake_for("escritorio", [{"prompt": "escritorio", "next_run_at": NOW + 3600}],
+    assert wt.next_wake_for("studio", [job(at=naive)], now=NOW) == NOW + 3600 - 120
+    assert wt.next_wake_for("studio", [{"prompt": "studio", "next_run_at": NOW + 3600}],
                             now=NOW) == NOW + 3600 - 120
 
 
 def test_garbage_jobs_do_not_raise():
-    assert wt.next_wake_for("escritorio", ["x", 3, None, {"next_run_at": []}], now=NOW) is None
+    assert wt.next_wake_for("studio", ["x", 3, None, {"next_run_at": []}], now=NOW) is None
 
 
 # --- arm commands per OS -----------------------------------------------------------------------
@@ -131,7 +131,7 @@ def test_linux_arm_writes_a_relative_rtc_alarm_or_uses_sudo_rtcwake():
     assert "echo 0 > $f && echo +3000 > $f" in script
     assert "sudo -n rtcwake -m no -s 3000" in script
     assert "\\" not in script and "'" not in script  # fish-safe
-    assert "escritorio" in note
+    assert "studio" in note
 
 
 def test_macos_arm_uses_pmset_relative_wake_through_sudo():
@@ -154,10 +154,10 @@ def test_windows_arm_registers_a_wake_to_run_task():
 
 def test_arm_records_the_time_for_ensure_ready(state):
     wt.arm(machine(), NOW + 3000, run=Run(ok("armed=direct")), now=lambda: NOW, state_file=state)
-    assert json.loads(state.read_text()) == {"escritorio": NOW + 3000}
-    assert wt.armed_at("escritorio", state) == NOW + 3000
+    assert json.loads(state.read_text()) == {"studio": NOW + 3000}
+    assert wt.armed_at("studio", state) == NOW + 3000
     assert wt.armed_at("torre", state) is None
-    assert wt.armed_at("escritorio", state.with_name("missing.json")) is None
+    assert wt.armed_at("studio", state.with_name("missing.json")) is None
 
 
 @pytest.mark.parametrize("result, why", [
@@ -264,7 +264,7 @@ def test_power_suspend_arms_the_timer_first(state, monkeypatch):
     assert "wake timer" in line and "backup nocturno" in line
     assert "wakealarm" in run.calls[0][0][-1]
     assert run.calls[1][0][-1] == "systemctl suspend"
-    assert wt.armed_at("escritorio", state) == NOW + 3600 - 120
+    assert wt.armed_at("studio", state) == NOW + 3600 - 120
 
 
 def test_power_suspend_without_upcoming_job_does_not_arm(monkeypatch):
@@ -324,14 +324,80 @@ def test_format_when():
 
 def test_machines_accepts_timer_and_wake_timer():
     loaded, problems = load_machines({"machines": {
-        "escritorio": {"profile": "p", "host": "h", "wake": "timer", "timer_lead": "5m"},
+        "studio": {"profile": "p", "host": "h", "wake": "timer", "timer_lead": "5m"},
         "torre": {"profile": "p", "host": "h", "wake": "wol", "mac": "00:11:22:33:44:55",
                   "wake_timer": True},
         "mini": {"profile": "p", "host": "h", "wake_timer": True},
         "bad": {"profile": "p", "host": "h", "wake_timer": "yes"},
     }})
-    assert loaded["escritorio"].wake == "timer" and loaded["escritorio"].timer_lead == 300.0
+    assert loaded["studio"].wake == "timer" and loaded["studio"].timer_lead == 300.0
     assert loaded["torre"].wake == "wol" and loaded["torre"].wake_timer
     assert loaded["mini"].wake == "timer"  # a timer alone is the wake method
     assert not loaded["bad"].wake_timer and any("wake_timer" in p for p in problems)
     assert Machine(name="n", profile="p", host="h").timer_lead == wt.DEFAULT_LEAD
+
+
+# --- audit: an alarm left armed, and the default machine ---------------------------------------
+
+def test_sleep_without_a_job_clears_the_alarm_armed_earlier(state, monkeypatch):
+    monkeypatch.setattr(wt, "state_path", lambda: state)
+    state.write_text(json.dumps({"studio": NOW + 3600, "otra": NOW + 50}))
+    run = Run(ok("cleared=yes"), ok())
+    line = power.power(machine(), "suspend", run=run, jobs=[], now=lambda: NOW)
+    assert "echo 0 > $f" in run.calls[0][0][-1] and run.calls[1][0][-1] == "systemctl suspend"
+    assert "until someone turns it on" in line and "could not be cleared" not in line
+    assert json.loads(state.read_text()) == {"otra": NOW + 50}
+
+
+def test_windows_clears_its_wake_task(state, monkeypatch):
+    monkeypatch.setattr(wt, "state_path", lambda: state)
+    state.write_text(json.dumps({"studio": NOW + 3600}))
+    run = Run(ok("cleared=yes"), ok())
+    power.power(machine(os="windows"), "suspend", run=run, jobs=[], now=lambda: NOW)
+    assert "Unregister-ScheduledTask -TaskName 'FlotaWake'" in decoded(run.calls[0][0])
+    assert wt.armed_at("studio", state) is None
+
+
+def test_an_alarm_that_cannot_be_cleared_is_kept_and_said(state, monkeypatch):
+    monkeypatch.setattr(wt, "state_path", lambda: state)
+    state.write_text(json.dumps({"studio": NOW + 3600}))
+    run = Run(fail(1), ok())  # wakealarm not writable (sudoers route)
+    line = power.power(machine(), "suspend", run=run, jobs=[], now=lambda: NOW)
+    assert "suspend sent" in line and "could not be cleared" in line
+    assert wt.armed_at("studio", state) == NOW + 3600  # still true: it will wake then
+
+
+def test_an_alarm_already_past_is_just_forgotten(state, monkeypatch):
+    monkeypatch.setattr(wt, "state_path", lambda: state)
+    state.write_text(json.dumps({"studio": NOW - 5}))
+    run = Run(ok())
+    power.power(machine(), "suspend", run=run, jobs=[], now=lambda: NOW)
+    assert len(run.calls) == 1 and wt.armed_at("studio", state) is None
+
+
+def test_the_default_machine_wakes_for_jobs_that_name_no_other_machine():
+    nightly = job(name="nightly", prompt="run the nightly build", at=NOW + 600)
+    other = job(name="sync", prompt="sync the photos on portatil", at=NOW + 300)
+    assert wt.next_job_for("studio", [nightly, other], now=NOW) is None
+    found = wt.next_job_for("studio", [nightly, other], now=NOW, others=["portatil"])
+    assert found[1] is nightly
+
+
+def test_arm_before_sleep_uses_the_default_only_when_told(state, monkeypatch):
+    monkeypatch.setattr(wt, "state_path", lambda: state)
+    monkeypatch.setattr(wt, "others_when_default", lambda name: pytest.fail("config read"))
+    nightly = job(name="nightly", prompt="run the nightly build", at=NOW + 3600)
+    run = Run(ok("armed=direct"))
+    assert "nightly" in wt.arm_before_sleep(machine(), run=run, jobs=[nightly], now=lambda: NOW, others=[])
+    assert wt.armed_at("studio", state) == NOW + 3600 - 120
+
+
+def test_others_when_default_reads_the_fleet(monkeypatch):
+    import hermes_cli.config as config_mod
+    panel = {"default": " studio ", "machines": {"studio": {}, "portatil": {}}}
+    monkeypatch.setattr(config_mod, "load_config_readonly",
+                        lambda: {"plugins": {"entries": {"flota": {"settings": panel}}}})
+    assert wt.others_when_default("studio") == ["portatil"]
+    assert wt.others_when_default("portatil") is None
+    monkeypatch.setattr(config_mod, "load_config_readonly", lambda: 1 / 0)
+    assert wt.others_when_default("studio") is None

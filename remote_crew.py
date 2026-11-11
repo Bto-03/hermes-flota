@@ -36,7 +36,9 @@ AVATAR_MAX = 48 * 1024  # raw bytes; its base64 fits crew.AVATAR_CAP (64 KB)
 _MIMES = ("image/png", "image/jpeg", "image/webp")
 _ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 _NAME_DROP = re.compile(r"[^\w .'-]+")
-_COLOR = re.compile(r"[#\w(),.% /-]{1,64}")
+# Hex, keyword or one colour function of numbers; never url(...) (the page would fetch it).
+_COLOR = re.compile(r"#[0-9a-fA-F]{3,8}|[A-Za-z]{3,24}"
+                    r"|(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch)\([0-9A-Za-z.,%/ +-]{1,48}\)")
 _B64 = re.compile(r"[A-Za-z0-9+/]+={0,2}")
 _HOST = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}")
 FLOTA_PREFIX = "flota-"

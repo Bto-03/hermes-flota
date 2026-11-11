@@ -287,3 +287,51 @@ def test_make_handler_reports_an_unreadable_config(monkeypatch):
 
     monkeypatch.setattr(slash, "_load_config", broken)
     assert "not valid YAML" in slash.make_handler(object())("status")
+
+
+class Watcher(Sleeper):
+    def __init__(self):
+        super().__init__()
+        self.watched, self.down = [], []
+
+    def watch(self, machine):
+        self.watched.append(machine.name)
+
+    def mark_down(self, machine):
+        self.down.append(machine.name)
+
+    def sleep_now(self, machine, action=None):
+        return f"{machine.name}: busy with 1 subagent(s), not put to sleep"
+
+
+def test_a_machine_woken_by_hand_gets_its_idle_timer():
+    sleeper = Watcher()
+    assert run("wake torre", ensure=lambda machine: 3.0, sleeper=sleeper) == "torre is up (waited 3s)"
+    assert sleeper.watched == ["torre"]
+
+
+def test_a_failed_wake_starts_no_idle_timer():
+    def ensure(machine):
+        raise WakeError("no")
+
+    sleeper = Watcher()
+    run("wake torre", ensure=ensure, sleeper=sleeper)
+    assert sleeper.watched == []
+
+
+@pytest.mark.parametrize("command, action", [("sleep", ""), ("off", "poweroff")])
+def test_force_stops_a_busy_machine(command, action):
+    sleeper, fake = Watcher(), Power()
+    settings = {"machines": {"pc": WAKEABLE}}
+    assert "busy" in run(f"{command} pc", settings=settings, sleeper=sleeper, power=fake)
+    out = run(f"{command} pc FORCE", settings=settings, sleeper=sleeper, power=fake)
+    assert sleeper.down == ["pc"] and fake.calls[-1][0] == "pc" and out == f"pc: {fake.calls[-1][1]} sent"
+    if command == "off":
+        assert fake.calls[-1] == ("pc", "poweroff")
+
+
+def test_force_does_not_skip_the_power_off_refusal_and_is_in_the_usage():
+    sleeper, fake = Watcher(), Power()
+    out = run("off pc force", settings={"machines": {"pc": SUSPEND}}, power=fake, sleeper=sleeper)
+    assert fake.calls == [] and sleeper.down == [] and out
+    assert "[force]" in run("sleep torre now", sleeper=sleeper)

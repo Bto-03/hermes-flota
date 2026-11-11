@@ -154,9 +154,9 @@ const ships = { asleep: ship({ up: false }), waking: ship({ waking: true }), idl
 
 // --- avatars, compact clusters, expanding rings ---
 const IMG = 'data:image/png;base64,iVBORw0KGgo='
-const bots = [{ id: 'a', name: 'asistente', avatar: IMG, color: null, state: 'awake' }, { id: 'c', name: 'coder', avatar: null, color: null, state: 'working' },
+const bots = [{ id: 'a', name: 'aide', avatar: IMG, color: null, state: 'awake' }, { id: 'c', name: 'coder', avatar: null, color: null, state: 'working' },
   { id: 's', name: 'scribe', avatar: null, color: 'oklch(0.7 0.1 30)', state: 'asleep' }]
-const eight = ['hermes', 'asistente', 'coder', 'research', 'scribe', 'ops', 'tutor', 'chef'].map((n, i) => ({ id: n, name: n, avatar: null, color: null, state: i === 5 ? 'asleep' : 'awake' }))
+const eight = ['hermes', 'aide', 'coder', 'research', 'scribe', 'ops', 'tutor', 'chef'].map((n, i) => ({ id: n, name: n, avatar: null, color: null, state: i === 5 ? 'asleep' : 'awake' }))
 const av = {
   up: ship({ up: true, crew: bots }),
   asleep: ship({ up: false, crew: bots.map(b => ({ ...b, state: 'asleep' })) }),
@@ -217,7 +217,7 @@ const flows = {
   chooser: render(mod.RoleChooser({ hubName: 'estudio', onChoose() {} })),
   fleets: render(mod.FleetsCard({ fleets: [{ flagship: 'estudio', pubkey_fingerprint: 'SHA256:abc', joined_at: '2026-11-08T10:00:00Z' }, { flagship: 'oficina', joined_at: 1762770000 }], api, onJoin() {} })),
   fleetsOld: render(mod.FleetsCard({ fleets: [], api, unsupported: true })),
-  shipMap: render(mod.ShipMap({ hub: { name: 'escritorio', os: 'linux' }, fleets: [{ flagship: 'estudio' }, { flagship: 'oficina' }], crew: bots })),
+  shipMap: render(mod.ShipMap({ hub: { name: 'studio', os: 'linux' }, fleets: [{ flagship: 'estudio' }, { flagship: 'oficina' }], crew: bots })),
   decoded: [mod.decodeInvite('flota1.' + Buffer.from(JSON.stringify({ flagship: 'estudio' })).toString('base64')), mod.decodeInvite('nonsense'), mod.decodeInvite('')],
   countdown: [mod.countdown(1000 + 581e3, 1000), mod.countdown(0, 1000), mod.countdown(1000 + 7500e3, 1000)],
   toMs: [mod.toMs(1762770000), mod.toMs(1762770000000), mod.toMs('2026-11-10T00:00:00Z'), mod.toMs(null)],
@@ -225,7 +225,7 @@ const flows = {
   checksWin: mod.joinChecks({ os: 'windows' }).map(c => c.fix),
 }
 const fleetRow = { flagship: 'estudio', pubkey_fingerprint: 'SHA256:abc', joined_at: '2026-11-08T10:00:00Z' }
-globalThis.__queries = { status: { data: status([], { role: 'ship', hub_crew: bots, hub: { name: 'escritorio' } }), dataUpdatedAt: Date.now() }, fleets: { data: { fleets: [fleetRow] } } }
+globalThis.__queries = { status: { data: status([], { role: 'ship', hub_crew: bots, hub: { name: 'studio' } }), dataUpdatedAt: Date.now() }, fleets: { data: { fleets: [fleetRow] } } }
 page.ship = render(mod.FlotaPage({ api }))
 globalThis.__queries = { status: { data: status([], { role: 'ship' }), dataUpdatedAt: Date.now() }, fleets: { data: { fleets: [] } } }
 page.join = render(mod.FlotaPage({ api }))
@@ -376,21 +376,21 @@ reach.kinds = [pluginOff, routeOff, new Error('Hermes desktop bridge unavailable
 reach.older = [mod.isOlderBackend(mod.classifyError(pluginOff)), mod.isOlderBackend(mod.classifyError(routeOff)), mod.isOlderBackend({ status: 404, message: 'Not Found' }),
   mod.isOlderBackend({ status: 404, message: 'Plugin not found' })]
 reach.conflict = mod.classifyError(new Error('409: {"detail":{"error":"already in a fleet","fleet":{"flagship":"servidor"}}}'))
-const routesAll = [{ profile: 'default', targetProfile: 'default', connectionId: 'local', mode: 'local' }, { profile: 'asistente', targetProfile: 'asistente', connectionId: 'local', mode: 'local' },
-  { profile: 'default', targetProfile: 'default', connectionId: 'server', mode: 'remote' }, { profile: 'flota-escritorio', targetProfile: 'flota-escritorio', connectionId: 'server', mode: 'remote' },
+const routesAll = [{ profile: 'default', targetProfile: 'default', connectionId: 'local', mode: 'local' }, { profile: 'aide', targetProfile: 'aide', connectionId: 'local', mode: 'local' },
+  { profile: 'default', targetProfile: 'default', connectionId: 'server', mode: 'remote' }, { profile: 'flota-studio', targetProfile: 'flota-studio', connectionId: 'server', mode: 'remote' },
   { profile: 'default', targetProfile: 'default', connectionId: 'server', mode: 'remote' }]
 const netReach = { links: [{ id: 'local', kind: 'local', label: 'desk-pc', keys: [] }, { id: 'server', kind: 'remote', label: 'server', keys: ['servidor'] }], routes: routesAll, activeId: null, ready: true }
 const probeCalls = []
 const probeSdk = { activeConnectionId: () => null, state: { profile: { get: () => 'default' } }, notify: n => probeCalls.push(['notify', n.kind, n.message]),
   requestProfile: (route, method, params) => { probeCalls.push([route.connectionId, route.profile, method, params]); return route.connectionId === 'server'
-    ? Promise.resolve({ type: 'plugin', output: 'Usage: /flota [status | dry-run <machine> | wake <machine>]\nMachines: escritorio' })
+    ? Promise.resolve({ type: 'plugin', output: 'Usage: /flota [status | dry-run <machine> | wake <machine>]\nMachines: studio' })
     : Promise.reject(new Error('4018 not a quick/plugin/bundle/skill command: flota')) },
   ensureAgent: (c, prof) => { probeCalls.push(['ensureAgent', c, prof]); return Promise.resolve() } }
 reach.scopeLocal = mod.currentScope(probeSdk, netReach)
 reach.cands = mod.probeCandidates(routesAll, reach.scopeLocal).map(r => `${r.connectionId}::${r.profile}`)
 reach.found = await mod.findFlagship(probeSdk, netReach, reach.scopeLocal)
 reach.probeCalls = probeCalls.slice()
-const botSdk = { ...probeSdk, activeConnectionId: () => 'server', state: { profile: { get: () => 'flota-escritorio' } } }
+const botSdk = { ...probeSdk, activeConnectionId: () => 'server', state: { profile: { get: () => 'flota-studio' } } }
 reach.scopeBot = mod.currentScope(botSdk, netReach)
 reach.foundBot = await mod.findFlagship(botSdk, netReach, reach.scopeBot)
 reach.none = await mod.findFlagship({ ...probeSdk, requestProfile: () => Promise.reject(new Error('x')) }, netReach, reach.scopeLocal)
@@ -455,6 +455,9 @@ life.toFlagshipFresh = await runLife('flagship', { fleet: null })
 life.toShipWithShips = await runLife('ship', { machines: [{ name: 'a' }, { name: 'b' }] })
 life.toShipClear = await runLife('ship-clear', { machines: [{ name: 'a' }, { name: 'b c' }] })
 life.toShip = await runLife('ship', { machines: [] })
+reply = path => path === '/role' ? new Error('Error invoking remote method: Error: 404: {"detail":"Not Found"}') : { ok: true }
+life.toShipClearOld = await runLife('ship-clear', { machines: [{ name: 'a' }, { name: 'b c' }] })
+reply = path => path.startsWith('/fleets/') ? { ok: true, role: null } : { ok: true }
 reply = path => path === '/role' ? new Error('409: {"detail":{"error":"this flagship has ships","needs":"remove_ships"}}') : { ok: true }
 life.refusedShips = await runLife('ship', { machines: [] })
 reply = path => path === '/role' ? new Error('409: {"error":"still in a fleet","needs":"leave_fleet"}') : { ok: true }
@@ -463,11 +466,11 @@ life.refusedFleet = await runLife('flagship', { fleet: null })
 reply = path => path === '/role' ? new Error('Error invoking remote method: Error: 409: {"error":"this machine is a ship of servidor","detail":"this machine is a ship of servidor","needs":"leave_fleet","fleet":{"flagship":"servidor"}}') : { ok: true }
 life.refusedReal = await runLife('flagship', { fleet: null })
 life.realJoin409 = mod.classifyError(new Error('409: {"error":"already in a fleet","fleet":{"flagship":"servidor"},"detail":"already in servidor\'s fleet"}'))
-life.texts = Object.fromEntries(['leave', 'flagship', 'ship', 'ship-clear'].map(k => [k, mod.roleActionText(k, { fleet: srv, machines: [{ name: 'escritorio' }, { name: 'nas' }] })]))
+life.texts = Object.fromEntries(['leave', 'flagship', 'ship', 'ship-clear'].map(k => [k, mod.roleActionText(k, { fleet: srv, machines: [{ name: 'studio' }, { name: 'nas' }] })]))
 life.textFresh = mod.roleActionText('flagship', {})
 life.member = render(mod.MembershipCard({ fleet: srv, onLeave() {}, onBecomeFlagship() {} }))
-const shipHand = { id: 'flota-escritorio', name: 'flota-escritorio', state: 'awake', ship_hand: true }
-globalThis.__queries = { status: { data: status([], { role: 'ship', fleet: srv, ships_count: 0, hub_crew: [...bots, shipHand], hub: { name: 'escritorio', os: 'linux' } }), dataUpdatedAt: Date.now() },
+const shipHand = { id: 'flota-studio', name: 'flota-studio', state: 'awake', ship_hand: true }
+globalThis.__queries = { status: { data: status([], { role: 'ship', fleet: srv, ships_count: 0, hub_crew: [...bots, shipHand], hub: { name: 'studio', os: 'linux' } }), dataUpdatedAt: Date.now() },
   fleets: { data: { fleets: [srv] } } }
 page.shipNew = render(mod.FlotaPage({ api }))
 globalThis.__queries = { status: { data: status([], { role: null, fleet: null, ships_count: 0 }), dataUpdatedAt: Date.now() }, fleets: { data: { fleets: [] } } }
@@ -486,7 +489,7 @@ life.wake = render(mod.JoinWizard({ api, hub: { os: 'windows' }, initial: { step
 life.wakeOpts = mod.wakeOptions({ wake_options: [{ id: 'wol', ok: true }, { id: 'timer' }, null] })
 
 // --- machines are not bots ---
-const desk = { ...base, name: 'escritorio', host: '203.0.113.7', hostname: 'desk-pc', profile: 'flota-escritorio', up: true, crew: [shipHand] }
+const desk = { ...base, name: 'studio', host: '203.0.113.7', hostname: 'desk-pc', profile: 'flota-studio', up: true, crew: [shipHand] }
 const deskBots = { ...desk, name: 'torre2', hostname: 'torre2', crew: [shipHand, rb('ops', 'torre2', 'torre2')] }
 const machinesView = {
   map: render(mod.FleetMap({ hub: { name: 'servidor' }, machines: [desk, deskBots], net })),
@@ -497,9 +500,63 @@ const machinesView = {
   remove: mod.removeText(desk),
 }
 
+// --- hardening ---
+const hard = {}
+const hc = []
+const hApi = mod.makeApi((path, opts) => { hc.push([path, (opts && opts.method) || 'GET', (opts && opts.body) || null]); return path === '/invite' && opts && opts.method === 'POST' ? Promise.reject(new Error('405: {"detail":"Method Not Allowed"}')) : Promise.resolve({}) })
+await hApi.addShip('SHIP-1', 'nas'); hard.named = [hc[0][0], hc[0][2]]
+await hApi.join('INV-1', 'servidor'); hard.confirmed = [hc[1][0], hc[1][2]]
+hc.length = 0; await hApi.invite(); hard.inviteOld = hc.map(c => [c[0], c[1]])
+const formBase = { name: 'nas', host: '10.0.0.9', user: 'u', key: '', description: '', mac: '', broadcast: '', wake: 'wol', sleep: 'suspend', sleep_after: '10m' }
+hard.bodyAuto = mod.machineBody({ ...formBase, port: '2222' })
+hard.bodyMac = mod.machineBody({ ...formBase, mac: 'aa:bb:cc:dd:ee:ff', port: '22' })
+hard.bodyNever = mod.machineBody({ ...formBase, wake: 'none' })
+hard.wake = [mod.wakeOutcome({ wake: 'wol', mac: 'aa:bb:cc:dd:ee:ff' }, 'wol'), mod.wakeOutcome({ wake: 'none', mac: '' }, 'wol'), mod.wakeOutcome({ wake: 'none' }, 'none'), mod.wakeOutcome({ ok: true }, 'wol')]
+hard.addDone = render(mod.AddressForm({ api, initial: { form: formBase, done: { ok: true, lines: ['✓ saved'], machine: 'nas', wake: 'none', mac: '' } } }))
+hard.invitePanel = render(mod.InvitePanel({ api, initial: { invite: { code: 'X', expires_at: null, flagship: 'f' } } }))
+hc.length = 0; await hApi.addShip('SHIP-1', 'nas', true); await hApi.addShip('SHIP-1', undefined, true); hard.replaceBodies = hc.map(c => c[2])
+const moved = "this ship code says it is 'torre', but it logs in as u@10.0.0.9 and 'torre' is saved as u@10.0.0.5. Nothing was changed. If 'torre' really moved there, run it again with --replace (hermes flota add-ship <code> --replace); otherwise do not add this code."
+const panelWith = detail => render(mod.InvitePanel({ api, initial: { invite: { code: 'X', expires_at: null, flagship: 'f' }, error: mod.classifyError(new Error('400: ' + JSON.stringify({ detail }))) } }))
+hard.replaceReason = [mod.replaceReason(mod.classifyError(new Error('400: ' + JSON.stringify({ detail: moved })))), mod.replaceReason(mod.classifyError(new Error('400: {"detail":"already used"}'))), mod.replaceReason(null)]
+hard.replacePanel = panelWith(moved); hard.usedPanel = panelWith('already used')
+const ref = { current: null }
+const e404 = new Error('404: {"detail":"Plugin not found"}')
+hard.sticky = [mod.stickyError(ref, { error: e404 }), mod.stickyError(ref, {}), mod.stickyError(ref, { data: {} }), mod.stickyError(ref, {})].map(e => e ? String(mod.parseError(e).status) : null)
+const store = {}
+globalThis.localStorage = { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v) }, removeItem: k => { delete store[k] } }
+const scL = { connectionId: 'local', profile: 'default', local: true }, scS = { connectionId: 'server', profile: 'default', local: false }
+hard.roleKeys = [mod.roleKey(scL), mod.roleKey(scS)]
+store['flota.role'] = 'ship'
+hard.roles = [mod.readStored(scL), mod.readStored(scS)]
+mod.writeStored('ship', scS); mod.writeStored('', scL)
+hard.roles.push(mod.readStored(scS), mod.readStored(scL))
+hard.help = [mod.isFlotaHelp('Usage: /flota [status]\nMachines: a'), mod.isFlotaHelp('Unknown command /flota'), mod.isFlotaHelp('try /flota help\nMachines: x'), mod.isFlotaHelp('')]
+const net2 = { links: [...netReach.links, { id: 'office', kind: 'remote', label: 'office', keys: [] }], routes: [...routesAll, { profile: 'default', targetProfile: 'default', connectionId: 'office', mode: 'remote' }], activeId: null, ready: true }
+const sdk2 = { ...probeSdk, requestProfile: route => route.connectionId === 'local' ? Promise.resolve({ output: 'Unknown command: /flota' })
+  : Promise.resolve({ output: `Usage: /flota [status]\nMachines: ${route.connectionId === 'server' ? 'studio' : 'none configured'}` }) }
+hard.two = await mod.findFlagship(sdk2, net2, reach.scopeLocal)
+hard.cardTwo = render(mod.ReachCard({ error: offErr, scope: reach.scopeLocal, probe: hard.two, onReach() {}, onRetry() {} }))
+// The page: choosing one remembers it only when asked to; auto-open can be cleared.
+const clickOpen = async (remember) => {
+  globalThis.__queries = { status: { error: pluginOff }, probe: { data: hard.two }, net: { data: net2 } }
+  const pg = mod.FlotaPage({ api, sdk: sdk2 })
+  walk(pg).find(n => n.type === 'Button' && n.props.children === 'Open the fleet on office').props.onClick()
+  await new Promise(r => setTimeout(r, 20))
+}
+await clickOpen(false); hard.rememberOff = mod.readReach()
+store['flota.flagshipRoute'] = JSON.stringify({ connectionId: 'office', profile: 'default' })
+await clickOpen(true); hard.rememberOn = mod.readReach()
+hard.lastPreferred = (await mod.findFlagship(sdk2, net2, reach.scopeLocal)).found.label
+mod.clearReach(); hard.cleared = mod.readReach()
+// A refetch with no data and no error (react-query resets it) keeps the offline card only through the ref;
+// with the stub's fresh refs the page itself must at least stay offline while the error is present.
+globalThis.__queries = { status: { error: pluginOff }, probe: { data: reach.found }, net: { data: netReach } }
+hard.offlineStill = mod.FlotaPage({ api, sdk: probeSdk }).props['data-mode']
+globalThis.__queries = null
+delete globalThis.localStorage
 disposers.forEach(fn => fn())
 console.log(JSON.stringify({
-  reach, life, machinesView,
+  hard, reach, life, machinesView,
   chats,
   id: plugin.id,
   contributions: contributions.map(c => ({ id: c.id, area: c.area, data: c.data && { ...c.data, run: typeof c.data.run }, render: typeof c.render })),
@@ -627,10 +684,50 @@ def test_page_shows_the_schedule_beside_the_map(run):
 def test_rest_paths(run):
     assert run["restCalls"] == [["/status", "GET"], ["/wake/torre", "POST"], ["/sleep/torre?force=1", "POST"],
                                 ["/off/torre", "POST"], ["/machines", "POST"], ["/machines/a%20b", "DELETE"],
-                                ["/schedule", "GET"], ["/invite", "GET"], ["/ships", "POST"], ["/join", "POST"],
+                                ["/schedule", "GET"], ["/invite", "POST"], ["/ships", "POST"], ["/join", "POST"],
                                 ["/join/check", "GET"], ["/fleets", "GET"], ["/fleets/estudio%20main", "DELETE"], ["/role", "POST"]]
-    assert run["restBodies"] == {"/machines": {"name": "x"}, "/ships": {"ship_code": "SHIP-1"}, "/join": {"code": "INV-1"},
+    # Every POST carries a JSON body, so the backend's "POST must be application/json" rule holds.
+    assert run["restBodies"] == {"/wake/torre": {}, "/sleep/torre?force=1": {"force": True}, "/off/torre": {}, "/invite": {},
+                                   "/machines": {"name": "x"}, "/ships": {"ship_code": "SHIP-1"}, "/join": {"code": "INV-1"},
                                    "/role": {"role": "ship"}}
+    h = run["hard"]
+    assert h["named"] == ["/ships", {"ship_code": "SHIP-1", "name": "nas"}]  # the ship's name travels with its code
+    assert h["confirmed"] == ["/join", {"code": "INV-1", "confirm": "servidor"}]
+    assert h["inviteOld"] == [["/invite", "POST"], ["/invite", "GET"]]  # a backend from before POST /invite
+
+
+def test_add_by_address_lets_setup_detect_wake(run):
+    h = run["hard"]
+    assert "wake" not in h["bodyAuto"] and h["bodyAuto"]["port"] == 2222  # WoL without a MAC: setup autodetects
+    assert h["bodyMac"]["wake"] == "wol" and h["bodyNever"]["wake"] == "none" and "port" not in h["bodyNever"]
+    ok, missing, never, old = h["wake"]
+    assert ok == {"ok": True, "text": "Wake: Wake-on-LAN is ready (MAC aa:bb:cc:dd:ee:ff)."}
+    assert missing["ok"] is False and "could not find this ship’s MAC address" in missing["text"]
+    assert never["ok"] is True and old is None
+    done = html.unescape(h["addDone"])
+    assert 'data-wake-result="none"' in done and "cannot wake it yet" in done
+    assert 'data-field="ship-name"' in h["invitePanel"] and "Name (optional)" in h["invitePanel"]
+
+
+def test_offline_error_does_not_blink_and_role_is_per_connection(run):
+    h = run["hard"]
+    assert h["sticky"] == ["404", "404", None, None]  # error kept through the errorless refetch, cleared by data
+    assert h["offlineStill"] == "offline"
+    assert h["roleKeys"] == ["flota.role::local::default", "flota.role::server::default"]
+    assert h["roles"] == ["ship", None, "ship", None]  # legacy key only for this PC's default profile
+
+
+def test_only_real_flota_help_counts_and_two_flagships_are_listed(run):
+    h = run["hard"]
+    assert h["help"] == [True, False, False, False]
+    two = h["two"]
+    assert [x["label"] for x in two["all"]] == ["server", "office"] and two["found"]["label"] == "server"
+    card = html.unescape(h["cardTwo"])
+    assert card.count('data-flagship-route="') == 2 and ">Open the fleet on server<" in card and ">Open the fleet on office<" in card
+    assert "2 of this app’s connections run Flota" in card and "Open the one I choose automatically next time" in card
+    assert "checked" not in html.unescape(run["reach"]["cardFound"])  # auto-open is off until asked for
+    assert h["rememberOff"] is None and h["rememberOn"] == {"connectionId": "office", "profile": "default"}
+    assert h["lastPreferred"] == "office" and h["cleared"] is None
 
 
 def test_new_endpoints_degrade_on_an_older_backend(run):
@@ -703,7 +800,7 @@ def test_schedule_panel(run):
     assert panel.count("flota-job linked selected") == 1  # the selected ship's job stands out
     assert "Every day at 02:00" in panel and "in 2 h 10 m" in panel
     empty = html.unescape(run["sched"]["empty"])
-    assert ('No scheduled jobs. Ask Hermes to schedule one (e.g. "every night at 2 run the backup on escritorio") '
+    assert ('No scheduled jobs. Ask Hermes to schedule one (e.g. "every night at 2 run the backup on studio") '
             "and Flota will wake that machine for it.") in empty
     assert "Next wake" not in empty and 'data-job="' not in empty
     assert "not readable from here (cron jobs unavailable: no cron)" in html.unescape(run["sched"]["unavailable"])
@@ -720,7 +817,7 @@ def test_helpers(run):
     assert run["parsed"] == {"status": 422, "message": "Nothing was saved.", "problems": ["machine 'x': bad mac"]}
     assert run["busy"]["status"] == 409 and run["busy"]["message"].startswith("torre is busy")
     # WoL without a MAC is saved as 'none' (setup detects the MAC and turns WoL on); no sleep_after with sleep none.
-    assert run["body"] == {"name": "torre", "host": "10.0.0.2", "sleep": "none", "wake": "none", "setup": True}
+    assert run["body"] == {"name": "torre", "host": "10.0.0.2", "sleep": "none", "setup": True}
     assert run["kinds"] == ["laptop", "server", "desktop", "laptop"]
     assert run["durations"] == ["10 min", "1 h 30 min", "", "45 s"]
 
@@ -870,7 +967,7 @@ def test_ship_view_and_fleets(run):
     m = html.unescape(run["flows"]["shipMap"])
     assert m.count('data-flagship-of="') == 2 and "Flagship · estudio" in m and "Flagship · oficina" in m
     assert m.count('class="flota-link signal"') == 2 and m.count('class="flota-flow signal"') == 2
-    assert "This machine · escritorio" in m and ">SHIP<" in m and "a ship in 2 fleets" in m
+    assert "This machine · studio" in m and ">SHIP<" in m and "a ship in 2 fleets" in m
     assert 'data-expand="ring"' in m  # this machine is on: its own crew fans out too
     fl = html.unescape(run["flows"]["fleets"])
     assert fl.count('data-fleet="') == 2 and fl.count(">Leave<") == 2 and "SHA256:abc" in fl and ">Join another fleet<" in fl
@@ -1025,12 +1122,12 @@ def test_the_flagship_is_found_on_another_connection(run):
     assert r["probeCalls"] == [["server", "default", "command.dispatch", {"name": "flota", "arg": "help"}]]
     f = r["found"]
     assert f["supported"] is True and f["tried"] == 1
-    assert f["found"]["label"] == "server" and f["found"]["machines"] == ["escritorio"] and f["found"]["sameConnection"] is False
+    assert f["found"]["label"] == "server" and f["found"]["machines"] == ["studio"] and f["found"]["sameConnection"] is False
     assert f["found"]["route"]["connectionId"] == "server"
     # Scoped to a bot profile on the flagship's connection: its default profile answers.
-    assert r["scopeBot"]["profile"] == "flota-escritorio" and r["scopeBot"]["label"] == "server"
+    assert r["scopeBot"]["profile"] == "flota-studio" and r["scopeBot"]["label"] == "server"
     assert r["foundBot"]["found"]["sameConnection"] is True and r["foundBot"]["found"]["route"]["profile"] == "default"
-    assert r["none"] == {"supported": True, "tried": 1, "found": None}
+    assert r["none"] == {"supported": True, "tried": 1, "found": None, "all": []}
     assert r["unsupported"] == {"supported": False, "tried": 0, "found": None}
     assert r["usage"] == [["a", "b"], [], []]
     # Opening it makes that connection the active one (host.ensureAgent); local goes through the profile path.
@@ -1042,14 +1139,14 @@ def test_reach_card_replaces_the_error(run):
     r = {k: html.unescape(v) for k, v in run["reach"].items() if isinstance(v, str)}
     found = r["cardFound"]
     assert 'data-reach="found"' in found and "This PC’s Hermes is a ship" in found
-    assert "Your fleet is managed by the flagship on server. It leads 1 ship: escritorio." in found
+    assert "Your fleet is managed by the flagship on server. It leads 1 ship: studio." in found
     assert ">Open the fleet on server<" in found and "Open the flagship automatically next time" in found
     assert 'data-flagship-route="server::default"' in found
     assert "This PC as a ship" in found and ">Open Plugins<" in found and "choose Join a fleet" in found
     assert "(Plugin not found)" not in found and "What this Hermes answered" in found  # raw text only in the toggle
     bot = r["cardBot"]
     assert 'data-reach="profile"' in bot and "Flota runs on another profile of server" in bot
-    assert "profile you last chatted with (flota-escritorio)" in bot and ">Use server · default<" in bot
+    assert "profile you last chatted with (flota-studio)" in bot and ">Use server · default<" in bot
     none = r["cardNone"]
     assert 'data-reach="none"' in none and "Flota is not enabled on this Hermes" in none
     assert "Enable the Flota plugin on this Hermes (Plugins) and restart its gateway." in none
@@ -1074,7 +1171,7 @@ def test_page_offers_the_flagship_and_switches_to_it(run):
 def test_stale_page_explains_a_wrong_profile_instead_of_update_failed(run):
     stale = html.unescape(run["page"]["staleErr"])
     assert 'class="flota-updateerr"' in stale and 'data-error="plugin-off"' in stale
-    assert "Flota not on profile flota-escritorio · retrying" in stale and ">Use server · default<" in stale
+    assert "Flota not on profile flota-studio · retrying" in stale and ">Use server · default<" in stale
     assert "update failed" not in stale and "Plugin not found" in stale  # the real error in the toggle
     upd = html.unescape(run["reach"]["updateErr"])
     assert "Desktop sends plugin requests to the profile you last chatted with" in upd
@@ -1096,7 +1193,8 @@ def test_role_actions_call_the_api_in_order(run):
     assert life["toFlagshipFresh"]["calls"] == [["/role", "POST", {"role": "flagship"}]]
     assert life["toShipWithShips"]["needs"] == "remove_ships" and life["toShipWithShips"]["calls"] == []
     assert "Remove them first" in life["toShipWithShips"]["error"]
-    assert life["toShipClear"]["calls"] == [["/machines/a", "DELETE", None], ["/machines/b%20c", "DELETE", None], ["/role", "POST", {"role": "ship"}]]
+    assert life["toShipClear"]["calls"] == [["/role", "POST", {"role": "ship", "force": True}]]  # one atomic step
+    assert life["toShipClearOld"]["calls"] == [["/role", "POST", {"role": "ship", "force": True}], ["/machines/a", "DELETE", None], ["/machines/b%20c", "DELETE", None]]
     assert life["toShip"] == {"role": "ship", "calls": [["/role", "POST", {"role": "ship"}]]}
     assert life["refusedShips"]["needs"] == "remove_ships" and "still has ships" in life["refusedShips"]["error"]
     assert life["refusedFleet"]["needs"] == "leave_fleet" and "Leave that fleet first" in life["refusedFleet"]["error"]
@@ -1111,7 +1209,7 @@ def test_role_confirmations_say_what_happens(run):
     assert "join another fleet, or create your own" in t["leave"]["description"]
     assert "leaves servidor’s fleet first" in t["flagship"]["description"] and t["flagship"]["confirmLabel"] == "Leave and become a flagship"
     assert run["life"]["textFresh"]["confirmLabel"] == "Become a flagship"
-    assert t["ship-clear"]["title"] == "Remove 2 ships and become a ship?" and "escritorio, nas will be removed" in t["ship-clear"]["description"]
+    assert t["ship-clear"]["title"] == "Remove 2 ships and become a ship?" and "studio, nas will be removed" in t["ship-clear"]["description"]
     assert "Leave fleet on its side to revoke" in t["ship-clear"]["description"]
     assert t["ship"]["title"] == "Join a fleet as a ship instead?"
 
@@ -1127,8 +1225,8 @@ def test_ship_side_leave_rejoin_and_become_flagship(run):
     assert 'data-menu="fleet"' in ship and 'data-action="leave"' in ship and 'data-action="become-flagship"' in ship
     assert re.search(r'data-action="join-another"[^>]*>', ship) and "leave servidor’s fleet first" in ship
     assert re.search(r'disabled="true"[^>]*data-action="join-another"', ship)
-    assert 'data-flagship-of="servidor"' in ship and "This machine · escritorio" in ship
-    assert "flota-escritorio" not in ship  # Flota's own SSH access is not a bot
+    assert 'data-flagship-of="servidor"' in ship and "This machine · studio" in ship
+    assert "flota-studio" not in ship  # Flota's own SSH access is not a bot
     # After leaving: role null -> the chooser; picking Join -> the wizard again.
     assert 'data-mode="choose"' in run["page"]["afterLeave"] and 'data-onboarding="role"' in run["page"]["afterLeave"]
     assert 'data-mode="join"' in run["page"]["rejoin"] and "What you need on this machine" in run["page"]["rejoin"]
@@ -1166,9 +1264,22 @@ def test_ships_read_as_machines_with_their_hostname(run):
     assert v["labels"] == ["desk-pc", "", ""]
     # ship_hand crew entries are Flota's SSH access: never shown as bots.
     assert v["crew"] == {"total": 0, "avatars": True} and v["crewBots"] == ["ops"]
-    assert 'data-bot="flota-escritorio"' not in m and "no bots on this machine" in m
-    assert 'aria-label="escritorio: machine desk-pc, Under way, no bots on this machine' in m
+    assert 'data-bot="flota-studio"' not in m and "no bots on this machine" in m
+    assert 'aria-label="studio: machine desk-pc, Under way, no bots on this machine' in m
     d = html.unescape(v["details"])
     assert '>Machine</span>' in d and "hostname desk-pc" in d and "no bots on this machine" in d
     assert "Flota’s door, not a bot" in d and ">Remove from fleet<" in d
     assert "open Flota there and choose Leave fleet" in v["remove"]
+
+
+def test_a_refused_re_point_offers_a_confirmed_replace(run):
+    h = run["hard"]
+    assert h["replaceBodies"] == [{"ship_code": "SHIP-1", "name": "nas", "replace": True},
+                                  {"ship_code": "SHIP-1", "replace": True}]
+    reason = h["replaceReason"]
+    assert reason[0].endswith("Nothing was changed.") and "u@10.0.0.9" in reason[0] and "--replace" not in reason[0]
+    assert reason[1:] == [None, None]
+    panel = html.unescape(h["replacePanel"])
+    assert 'data-action="replace-ship"' in panel and "This machine really moved - replace it" in panel
+    assert "saved as u@10.0.0.5" in panel and "hermes flota add-ship" not in panel
+    assert "replace-ship" not in h["usedPanel"] and "already used" in h["usedPanel"]

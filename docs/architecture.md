@@ -67,7 +67,9 @@ Notes:
 - `_expected`: tasks routed whose child hasn't started yet, as `(goal, machine, time)`. The hooks carry no route label, so a child is matched to its machine by **goal text**. An expectation older than 10 minutes counts as a child that never started.
 - `_running`: `child_session_id → machine` between `subagent_start` and `subagent_stop`.
 
-`busy(machine)` is the sum of the three. Auto-sleep, `/flota sleep|off` and the agent tool all go through the sleeper and refuse when it's non-zero.
+`busy(machine)` is the sum of the three. Auto-sleep, `/flota sleep|off` and the agent tool all go through the sleeper and refuse when it's non-zero. The agent tool has no force option; `/flota sleep|off <machine> force` (typed by a person) clears the machine's timer and powers it down directly.
+
+`watch(machine)` starts an idle timer for a machine that is awake with no subagent: after `/flota wake`, the tool's `wake`, a self-armed wake timer's job, or, on the first delegation of a new process, for machines a dead process (a restarted gateway) left busy in `state.json`. The timer sleeps the machine only if it is still up and idle after a full `sleep_after`; a failed auto-sleep is checked again once, 60 s later.
 
 Whenever the counts change, the sleeper writes them atomically to `<hermes home>/flota/state.json`:
 
@@ -87,7 +89,7 @@ The CLI (`hermes flota sleep|off|status`) and the dashboard run in other process
 
 Core's SSH terminal (`tools/environments/ssh.py`, `SSHEnvironment`) mirrors local skills, credentials and caches into `<remote $HOME>/.hermes` when it connects. On cleanup it tars that whole directory back (120 s timeout, three tries). That suits a throwaway box, but a Flota machine is one of your own computers: its `~/.hermes` may be a real Hermes install of many GB. The push would write this host's files, credentials included, into it, and the pull would time out after holding the parent for minutes.
 
-`ssh_guard.install()` wraps `SSHEnvironment.__init__` and passes `sync_files=False` when the active Hermes home is a `profiles/flota-*` profile, which is how core runs a Flota subagent. Other profiles are untouched. If the core's constructor has no `sync_files` parameter, the guard logs a warning and `doctor` reports `✗ SSH file sync is on`.
+`ssh_guard.install()` wraps `SSHEnvironment.__init__` and passes `sync_files=False` when the active Hermes home is a profile Flota runs subagents as, which is how core runs a Flota subagent: a `profiles/flota-*` profile, one marked at setup (`flota/owner`), or the `profile` of any configured machine. Other profiles are untouched. If the core's constructor has no `sync_files` parameter, the guard logs a warning and `doctor` reports `✗ SSH file sync is on`.
 
 ## Modules
 

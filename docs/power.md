@@ -2,7 +2,8 @@
 
 Flota puts a machine to sleep in three situations:
 
-- **Auto-sleep**, `sleep_after` after its last subagent.
+- **Auto-sleep**, after `sleep_after` with no subagents on the machine. The idle timer starts after its last subagent, and also when a machine is awake with no subagent on it: woken by `/flota wake`, the agent tool or its wake timer, or left marked busy by a gateway that restarted (picked up on the first delegation of the new process). It never fires while the machine is busy. A failed auto-sleep is retried once, 60 s later.
+- A machine with `wake: none` (and no `wake_timer`) gets `sleep: none` by default: Flota never auto-sleeps what it couldn't turn on again. Set `sleep` explicitly to change that.
 - **On request**: `/flota sleep`, `hermes flota sleep`, the agent tool, or the Sleep button on the dashboard or Flota page.
 - **Power off on request**: `off` from any of the same places.
 
@@ -30,7 +31,7 @@ The running Hermes process (normally the gateway) counts, per machine:
 
 **Auto-sleep** fires only when all three counts are zero. A new task cancels a pending timer.
 
-**`/flota sleep`, `/flota off` and the agent tool** (which run in that same process) refuse a busy machine and answer `<name>: busy with N subagent(s), not put to sleep`.
+**The agent tool** always refuses a busy machine; it has no force option, so neither the model nor text injected into it can stop a working machine. **`/flota sleep|off <machine>`** (same process) refuses too, answering `<name>: busy with N subagent(s), not put to sleep`; a person can type `/flota sleep <machine> force` (or `off ... force`) to do it anyway.
 
 **`hermes flota sleep|off`, the dashboard and the Flota page** run in other processes, so they read the counts from `<hermes home>/flota/state.json`. The file is ignored if the process that wrote it is gone or it's older than a day. They refuse a busy machine unless you force it: `--force` on the CLI, or a confirmation in the UI. With no live gateway they can't know, so they don't refuse.
 
@@ -86,7 +87,7 @@ If arming fails, the machine is **not** suspended (`suspend failed: ...; not sus
 
 When a task arrives for a sleeping `timer` machine, Flota can't wake it. It waits for the machine only if its alarm is due within `wake_timeout` (or has just fired); otherwise the task fails at once with `<name> sleeps until its wake timer at 02:00 or until you turn it on`, and the agent can resend it elsewhere.
 
-From a real test on 2026-11-10: a scheduled job woke a suspended Linux desktop through its own alarm (about 27 s until SSH answered), ran there, and Flota auto-suspended the desktop 2 minutes after the job.
+Status: the wake-timer path (arming, the `FlotaWake` task, the waiting rule above) is unit-tested only; it has not yet been tested end to end on real hardware. Treat `wake: timer` as experimental.
 
 ### What arming needs, per OS
 

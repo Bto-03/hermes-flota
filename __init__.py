@@ -13,6 +13,13 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _machine(name: str):
+    """The machine as configured right now, or None when it was removed."""
+    from . import tool
+    from .machines import load_machines
+    return load_machines(tool._effective(tool._load_config() or {}))[0].get(name)
+
+
 def register(ctx) -> None:
     try:
         from .provider import FlotaDelegationProvider
@@ -29,7 +36,7 @@ def register(ctx) -> None:
 
     # shortcut: one state file per profile; two processes running subagents at once (gateway and a
     # chat session) overwrite each other's counts, upgrade to one file per pid if that matters.
-    sleeper = IdleSleeper(state_file=state_path)
+    sleeper = IdleSleeper(state_file=state_path, reload=_machine)
     ctx.register_delegation_provider(FlotaDelegationProvider(sleeper=sleeper))
     ctx.register_hook("subagent_start", sleeper.on_start)
     ctx.register_hook("subagent_stop", sleeper.on_stop)

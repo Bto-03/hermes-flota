@@ -21,20 +21,21 @@ def home(monkeypatch):
 
 
 @pytest.mark.parametrize("path, flota", [
-    ("/home/bob/.hermes/profiles/flota-escritorio", True),
+    ("/home/bob/.hermes/profiles/flota-studio", True),
     ("/home/bob/.hermes/profiles/flota-test", True),
     ("/home/bob/.hermes", False),
     ("/home/bob/.hermes/profiles/assistant", False),
     ("/home/bob/flota-x", False),  # not a profile directory
 ])
-def test_only_flota_profiles_are_matched(path, flota):
+def test_only_flota_profiles_are_matched(path, flota, monkeypatch):
+    monkeypatch.setattr(ssh_guard, "_machine_profiles", set)
     assert ssh_guard.is_flota_profile(Path(path)) is flota
 
 
 def test_a_flota_profile_gets_no_file_sync(home):
     cls = type("SSH", (FakeSSH,), {})
     assert ssh_guard.install(cls) is True
-    home["home"] = Path("/home/bob/.hermes/profiles/flota-escritorio")
+    home["home"] = Path("/home/bob/.hermes/profiles/flota-studio")
     assert cls("192.0.2.3", "alice").sync_files is False
     assert cls("192.0.2.3", "alice", sync_files=True).sync_files is False
 
@@ -70,3 +71,29 @@ def test_the_real_core_class_takes_sync_files():
     from tools.environments.ssh import SSHEnvironment
     import inspect
     assert "sync_files" in inspect.signature(SSHEnvironment.__init__).parameters
+
+
+def test_a_machine_profile_with_any_name_is_guarded(tmp_path, monkeypatch):
+    monkeypatch.setattr(ssh_guard, "_machine_profiles", lambda: {"workpc"})
+    assert ssh_guard.is_flota_profile(tmp_path / "profiles" / "workpc") is True
+    assert ssh_guard.is_flota_profile(tmp_path / "profiles" / "assistant") is False
+    assert ssh_guard.is_flota_profile(tmp_path / "workpc") is False  # not a profile directory
+
+
+def test_a_profile_marked_at_setup_is_guarded(tmp_path, monkeypatch):
+    monkeypatch.setattr(ssh_guard, "_machine_profiles", set)
+    home = tmp_path / "profiles" / "workpc"
+    (home / "flota").mkdir(parents=True)
+    assert ssh_guard.is_flota_profile(home) is False
+    (home / "flota" / "owner").write_text(str(tmp_path))
+    assert ssh_guard.is_flota_profile(home) is True
+
+
+def test_machine_profiles_come_from_the_config(monkeypatch):
+    import hermes_cli.config as config_mod
+    panel = {"machines": {"pc": {"profile": "workpc", "host": "192.0.2.9"}}}
+    monkeypatch.setattr(config_mod, "load_config_readonly",
+                        lambda: {"plugins": {"entries": {"flota": {"settings": panel}}}})
+    assert ssh_guard._machine_profiles() == {"workpc"}
+    monkeypatch.setattr(config_mod, "load_config_readonly", lambda: 1 / 0)
+    assert ssh_guard._machine_profiles() == set()

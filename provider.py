@@ -31,12 +31,14 @@ from typing import Any
 from agent.delegation_provider import DelegationProvider, DelegationRouteError
 
 from .machines import Machine, load_machines, parse_duration
-from .settings import effective, plugin_settings_from_config
+from .settings import WAKEABLE, effective, plugin_settings_from_config
 from .wake import WakeError, ensure_ready, is_up
 
 logger = logging.getLogger(__name__)
 
-_DOWN_WAIT = 20.0  # how long a machine that was just told to sleep gets to stop answering
+# How long a machine that was just told to sleep gets to stop answering. Sending the sleep can take
+# 50s (arm its wake timer, then the ssh command), so this matches idle._GOING_DOWN_FOR.
+_DOWN_WAIT = 60.0
 
 BACKEND = "flota"
 PARAMETER = "machine"
@@ -56,7 +58,15 @@ def _panel() -> Mapping[str, Any]:
         from hermes_cli.config import load_config_readonly
     except ImportError:
         return {}
-    return plugin_settings_from_config(load_config_readonly() or {})
+    from .home import owner_scope
+    with owner_scope():  # a flota-<machine> profile holds a stale copy of the fleet
+        return plugin_settings_from_config(load_config_readonly() or {})
+
+
+def _own_route(config: Mapping[str, Any] | None) -> dict[str, Any]:
+    """The route of a task that goes to no machine: the ``delegation`` section, as the default
+    backend answers, so ``delegation.model`` / ``provider`` still apply. Core keeps the route keys."""
+    return {k: v for k, v in (config or {}).items() if k != "service_tier"}
 
 
 def _settings(config: Mapping[str, Any] | None) -> dict:
@@ -137,12 +147,12 @@ class FlotaDelegationProvider(DelegationProvider):
             if isinstance(default, str):
                 default = default.strip()
             if default in (None, ""):
-                return {}
+                return _own_route(config)
             # isinstance first: an unhashable value (a YAML list) cannot be looked up.
             if not isinstance(default, str) or default not in machines:
                 _warn_once(f"delegation.backends.{BACKEND}.default {default!r} is not a loaded machine; "
                            "tasks without a machine use the default route.")
-                return {}
+                return _own_route(config)
             chosen = default
         machine = machines.get(chosen)
         if machine is None:  # core enforces the enum; this is a schema built from an older config
@@ -150,17 +160,24 @@ class FlotaDelegationProvider(DelegationProvider):
                 f"Machine '{chosen}' is not configured." + self._advice(machines, {chosen}))
 
         claimed: list[Machine] = []
+        late: list[Machine] = []
         try:
-            return self._route(machines, machine, task, claimed)
+            return self._route(machines, machine, task, claimed, late)
         finally:  # routed() now holds the machine awake (or the route failed)
             for held in claimed:
                 self._sleeper.release(held)
+            # Woken but not up in time: it may finish booting with no task. Look once more after
+            # another wake_timeout and give it its idle timer only if it answers then.
+            for woken in late:
+                if self._sleeper is not None and woken.wake in WAKEABLE:
+                    self._sleeper.watch(woken, delay=max(woken.wake_timeout, 1.0))
 
-    def _route(self, machines, machine, task, claimed) -> dict[str, Any]:
+    def _route(self, machines, machine, task, claimed, late) -> dict[str, Any]:
         try:
             self._ready(machine, claimed)
             label = f"{BACKEND}:{machine.name}"
         except WakeError as exc:
+            late.append(machine)
             failure, tried = f"Machine '{machine.name}' is not available: {exc}.", {machine.name}
             used = machines.get(machine.fallback)
             if used is None:
@@ -168,6 +185,7 @@ class FlotaDelegationProvider(DelegationProvider):
             try:  # once: the fallback's own fallback is never followed
                 self._ready(used, claimed)
             except WakeError as second:
+                late.append(used)
                 tried.add(used.name)
                 raise DelegationRouteError(
                     f"{failure} Its fallback '{used.name}' is not available either: {second}."

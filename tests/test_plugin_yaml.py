@@ -10,7 +10,7 @@ SCHEMA = MANIFEST["config_schema"]
 
 def test_manifest_declares_the_tool_and_version():
     assert MANIFEST["provides_tools"] == ["flota"]
-    assert MANIFEST["version"] == "0.2.0"
+    assert MANIFEST["version"] == "0.2.1"
     assert MANIFEST["provides_hooks"] == ["subagent_start", "subagent_stop"]
 
 

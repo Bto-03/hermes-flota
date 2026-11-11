@@ -1,17 +1,17 @@
 name: flota
 label: Flota
 kind: standalone
-version: 0.2.0
+version: 0.2.1
 author: Francisco Bastidas
 description: >
   Run delegate_task subagents on your own machines over SSH
   (delegation.backend: flota). Flota wakes the chosen machine if it is
-  asleep (Wake-on-LAN, a relay host on its LAN, or any command such as a
-  smart plug), falls back to another machine if it does not come up, and
-  suspends it after its last subagent. `hermes flota setup` detects each
-  machine's MAC, broadcast and sleep method over SSH; `hermes flota doctor`
-  checks it and prints fixes; `/flota dry-run <machine>` explains every step
-  without sending anything. Python standard library only.
+  asleep (Wake-on-LAN, a relay host on its LAN, a command such as a smart
+  plug, or the machine's own wake timer), runs the work there and puts it
+  back to sleep after its last subagent, never while it is busy. It powers
+  off only machines it can wake again. Pair machines with one-time codes,
+  see the fleet on the Flota page of Hermes Desktop, and check everything
+  with `hermes flota doctor`. Python standard library only.
 requires_hermes: ">=0.22.5"
 provides_tools: [flota]
 provides_hooks: [subagent_start, subagent_stop]

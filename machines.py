@@ -13,6 +13,9 @@ OS_NAMES = ("linux", "macos", "windows")
 
 _DURATION = re.compile(r"(\d+(?:\.\d+)?)\s*([smh]?)")
 _UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600}
+# What ssh accepts as a destination and a login name; nothing a shell or a polkit rule would read as syntax.
+HOST = re.compile(r"[A-Za-z0-9_.:%\[\]][A-Za-z0-9_.:%\[\]-]{0,252}")
+USER = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9_.@\\-]{0,63}")
 _MAC = re.compile(r"[0-9a-f]{2}(?:([:-]?)[0-9a-f]{2})(?:\1[0-9a-f]{2}){4}", re.IGNORECASE)
 
 
@@ -72,6 +75,10 @@ def _parse(name: str, entry, problems: list[str]) -> Machine | None:
     for key, value in (("host", host), ("user", _text(entry, "user"))):
         if value.startswith("-"):
             return skip(f"'{key}' must not start with '-' (ssh would read it as an option)")
+    if not HOST.fullmatch(host):
+        return skip(f"'host' is not a hostname or IP address: {host!r}")
+    if _text(entry, "user") and not USER.fullmatch(_text(entry, "user")):
+        return skip(f"'user' is not a login name: {_text(entry, 'user')!r}")
 
     wake = entry.get("wake")
     wake = "none" if wake is None else wake.strip() if isinstance(wake, str) else wake
@@ -124,11 +131,18 @@ def _parse(name: str, entry, problems: list[str]) -> Machine | None:
                         "auto-sleep disabled")
         sleep_after = 0.0
 
+    wake_timeout = parse_duration(entry.get("wake_timeout"), 90.0)
+    if not 10.0 <= wake_timeout <= 600.0:  # 0 fails before a packet lands; hours outlast the gateway
+        clamped = min(max(wake_timeout, 10.0), 600.0)
+        problems.append(f"machine '{name}': wake_timeout must be 10s to 10m, got "
+                        f"{entry.get('wake_timeout')!r}; using {clamped:g}s")
+        wake_timeout = clamped
+
     return Machine(
         name=name, profile=profile, host=host, port=port,
         description=" ".join(_text(entry, "description").split()), wake=wake, mac=mac,
         broadcast=_text(entry, "broadcast") or "255.255.255.255", via=via,
-        wake_command=wake_command, wake_timeout=parse_duration(entry.get("wake_timeout"), 90.0),
+        wake_command=wake_command, wake_timeout=wake_timeout,
         fallback=_text(entry, "fallback"), sleep_after=sleep_after, sleep_command=sleep_command,
         user=_text(entry, "user"), key=_text(entry, "key"), sleep=sleep,
         power_prefix=_text(entry, "power_prefix"), os=os_name, wake_timer=wake_timer,

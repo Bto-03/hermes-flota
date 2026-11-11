@@ -17,7 +17,7 @@ hermes flota doctor          # every machine; add a name for one
 | `✗ machine 'x': fallback 'y' ...; fallback cleared` | The fallback is the machine itself, or not a loaded machine | Point it at another machine |
 | `✗ SSH: host:22 is not answering` | Off, asleep, wrong address, or a firewall | `hermes flota wake x`; check the address |
 | `✗ SSH: port open but login failed: Permission denied ...` | The key isn't authorised, or the user is wrong | `ssh-copy-id user@host`, or pair again |
-| `✗ profile flota-x is missing` / `terminal is local ..., not ssh host` | The profile was deleted or edited by hand | Run `hermes flota setup x --host ... --user ...` again |
+| `✗ profile flota-x is missing` / `terminal is local ..., not ssh host` | The profile was deleted or edited by hand | Run `hermes flota setup x --host ... --user ...` again (`doctor` prints the exact line) |
 | `✗ SSH file sync is on` | This Hermes core's `SSHEnvironment` has no `sync_files` parameter, so subagents would copy the machine's `~/.hermes` back after each run | Update Hermes and Flota |
 | `✗ no wake method` | `wake: none` | Run `setup` again while the machine is on, to detect its MAC |
 | `✗ Wake-on-LAN disabled on enp3s0` | The NIC has WoL off | Run the printed commands as root (`ethtool -s <iface> wol g`, then make it persistent with `nmcli ... wake-on-lan magic`), and enable WoL in the BIOS/UEFI |
@@ -59,5 +59,13 @@ hermes flota doctor          # every machine; add a name for one
 **`add-ship`: "this ship code answers an invite this Hermes did not issue, or one already used".** Each invite adds one ship, and only on the flagship that issued it. Make a new invite.
 
 **`join`: "already in a fleet: ...".** A ship belongs to one fleet. Run `hermes flota leave` first.
+
+**`setup`: "⚠ Saved 'x' but NOT verified: ... is not answering".** The machine was saved with what you gave, but nothing was detected or checked. Turn it on and run the same command again, or undo it with `hermes flota remove x`.
+
+**`add-ship`: "this ship code says it is 'x', but it logs in as ...".** The code matches a machine already in the fleet but logs in on an address or user that machine doesn't have. Nothing was changed. If the machine really moved, run `hermes flota add-ship <code> --replace` (or press "This machine really moved - replace it" on the page); otherwise don't add the code.
+
+**`/flota sleep desk` answers "busy with N subagent(s), not put to sleep".** By design. If you're sure, type `/flota sleep desk force`. The agent can't do this for you: its tool has no force option.
+
+**Not sure what to do next?** Run `hermes flota` with no arguments: it prints where this Hermes stands and the one command to run next.
 
 **Subagents were slow to finish and the machine's disk filled up.** That's SSH file sync: `doctor` shows `✗ SSH file sync is on`. Update Hermes and Flota so the guard can install.

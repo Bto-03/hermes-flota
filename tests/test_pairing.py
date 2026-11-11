@@ -62,6 +62,7 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "_is_up", lambda m: False)
     monkeypatch.setattr(cli, "_hermes_home", lambda: tmp_path / "hermes")
     monkeypatch.setattr(cli, "_home", lambda: e.home)
+    monkeypatch.setattr(cli, "_key_is_file", lambda path: True)
     monkeypatch.setattr(cli, "_hostname", lambda: "Torre.local")
     monkeypatch.setattr(cli, "_login_user", lambda: "carol")
     monkeypatch.setattr(cli, "_local_os", lambda: "linux")
@@ -203,6 +204,7 @@ def test_malformed_invites_are_refused(code, match):
 
 
 @pytest.mark.parametrize("field, value", [("host", "-oProxyCommand=x"), ("user", "-l"), ("name", "../x"),
+                                          ("name", "pc\n"), ("user", "bob\n"), ("host", "10.0.0.5\n"),
                                           ("mac", "zz"), ("os", "plan9"), ("alt_hosts", ["a b"]), ("port", 0)])
 def test_malformed_ship_fields_are_refused(env, field, value):
     with pytest.raises(pairing.PairingError):
@@ -306,13 +308,13 @@ def test_cli_invite_join_commands(env, capsys, monkeypatch):
     cli.setup_parser(parser)
     args = parser.parse_args(["invite"])
     assert args.func(args) == 0
-    code = capsys.readouterr().out.strip().splitlines()[-1]
+    code = capsys.readouterr().out.strip().splitlines()[-1].split()[3]  # hermes flota join <code> --yes
     as_ship(env)
     args = parser.parse_args(["join", code])  # not a tty: refuses without --yes
     assert args.func(args) == 1
     args = parser.parse_args(["join", code, "--yes"])
     assert args.func(args) == 0
-    assert capsys.readouterr().out.strip().splitlines()[-1].startswith("FLOTA1-SHIP-")
+    assert capsys.readouterr().out.strip().splitlines()[-1].startswith("hermes flota add-ship FLOTA1-SHIP-")
     args = parser.parse_args(["join", "garbage", "--yes"])
     assert args.func(args) == 2
     args = parser.parse_args(["leave", "nobody"])
@@ -321,7 +323,7 @@ def test_cli_invite_join_commands(env, capsys, monkeypatch):
 
 # --- a ship already in the fleet is updated, not duplicated --------------------------------------
 
-ESCRITORIO = {"profile": "flota-escritorio", "host": "192.0.2.28", "user": "carol", "wake": "wol",
+STUDIO = {"profile": "flota-studio", "host": "192.0.2.28", "user": "carol", "wake": "wol",
               "mac": "AA:BB:CC:DD:EE:FF", "description": "the desktop", "port": 22}
 
 
@@ -329,36 +331,60 @@ def _fleet(env, **machines):
     env.configs[ACTIVE] = {"plugins": {"entries": {"flota": {"settings": {"machines": machines}}}}}
 
 
-@pytest.mark.parametrize("override", [
-    {"mac": NET["mac"], "host": "203.0.113.2", "alt_hosts": []},  # same MAC, new address
-    {"mac": "", "host": "192.0.2.28", "alt_hosts": []},  # same host, no MAC
-    {"mac": "", "host": "10.9.9.9", "alt_hosts": ["192.0.2.28"]},  # one of its addresses
+@pytest.mark.parametrize("override, replace", [
+    ({"mac": NET["mac"], "host": "203.0.113.2", "alt_hosts": []}, True),  # same MAC, new address: --replace
+    ({"mac": "", "host": "192.0.2.28", "alt_hosts": []}, False),  # same host, no MAC
+    ({"mac": NET["mac"], "host": "192.0.2.28", "alt_hosts": ["10.9.9.9"]}, False),  # same MAC and address
+    ({"mac": "", "host": "10.9.9.9", "alt_hosts": ["192.0.2.28"]}, True),  # logs in on a new address
 ])
-def test_add_ship_updates_the_machine_with_the_same_mac_or_host(env, override):
-    _fleet(env, escritorio=dict(ESCRITORIO), other={"profile": "flota-other", "host": "10.0.0.9"})
-    env.configs[PROFILES / "flota-escritorio" / "config.yaml"] = {"terminal": {"backend": "ssh"}}
-    result = cli.run_add_ship(_ship_code(env, name="desk-pc", crew_names=["Lia"], **override))
+def test_add_ship_updates_the_machine_with_the_same_mac_or_host(env, override, replace):
+    _fleet(env, studio=dict(STUDIO), other={"profile": "flota-other", "host": "10.0.0.9"})
+    env.configs[PROFILES / "flota-studio" / "config.yaml"] = {"terminal": {"backend": "ssh"}}
+    result = cli.run_add_ship(_ship_code(env, name="desk-pc", crew_names=["Lia"], **override), replace=replace)
     assert result["ok"], result["lines"]
-    assert result["machine"] == "escritorio"
+    assert result["machine"] == "studio"
     machines = panel(env)["machines"]
-    assert set(machines) == {"escritorio", "other"}  # no desk-pc duplicate
-    entry = machines["escritorio"]
-    assert entry["profile"] == "flota-escritorio" and entry["description"] == "the desktop"
+    assert set(machines) == {"studio", "other"}  # no desk-pc duplicate
+    entry = machines["studio"]
+    assert entry["profile"] == "flota-studio" and entry["description"] == "the desktop"
     assert entry["crew_names"] == ["Lia"] and entry["host"] == override["host"]
     assert not any(path.parent.name == "flota-desk-pc" for path in env.configs)
-    assert any("already in the fleet as 'escritorio'" in line for line in result["lines"])
+    assert any("already in the fleet as 'studio'" in line for line in result["lines"])
+
+
+@pytest.mark.parametrize("override", [
+    {"mac": NET["mac"], "host": "203.0.113.66", "alt_hosts": [], "user": "mallory"},  # claimed MAC, own box
+    {"mac": "", "host": "203.0.113.66", "alt_hosts": ["192.0.2.28"]},  # claimed address, logs in elsewhere
+    {"mac": "", "host": "192.0.2.28", "alt_hosts": [], "user": "mallory"},  # same address, other user
+    {"mac": NET["mac"], "host": "192.0.2.28", "alt_hosts": [], "port": 2222},  # same address, other port
+])
+def test_add_ship_never_silently_repoints_an_existing_machine(env, override, capsys):
+    _fleet(env, studio=dict(STUDIO))
+    env.configs[PROFILES / "flota-studio" / "config.yaml"] = {"terminal": {"backend": "ssh", "ssh_host": "192.0.2.28"}}
+    before = copy.deepcopy(env.configs)
+    code = _ship_code(env, name="guest", **override)
+    with pytest.raises(pairing.PairingError, match="--replace"):
+        cli.run_add_ship(code)
+    assert env.configs == before  # machine and profile untouched
+    parser = argparse.ArgumentParser(prog="hermes flota")
+    cli.setup_parser(parser)
+    args = parser.parse_args(["add-ship", code])
+    assert args.func(args) == 2 and "studio" in capsys.readouterr().err
+    args = parser.parse_args(["add-ship", code, "--replace"])  # the nonce was not spent by the refusals
+    assert args.func(args) == 0
+    assert panel(env)["machines"]["studio"]["host"] == override["host"]
 
 
 def test_add_ship_keeps_a_hand_picked_profile_and_wake(env):
-    _fleet(env, escritorio={**ESCRITORIO, "profile": "pc", "wake": "wol_via", "via": "mini"},
+    _fleet(env, studio={**STUDIO, "profile": "pc", "wake": "wol_via", "via": "mini"},
            mini={"profile": "flota-mini", "host": "10.0.0.7", "wake": "none"})
     env.configs[PROFILES / "pc" / "config.yaml"] = {}
-    result = cli.run_add_ship(_ship_code(env, name="desk-box", mac=NET["mac"]))
+    result = cli.run_add_ship(_ship_code(env, name="desk-box", mac=NET["mac"]), replace=True)
     assert result["ok"], result["lines"]
-    entry = panel(env)["machines"]["escritorio"]
+    entry = panel(env)["machines"]["studio"]
     assert entry["profile"] == "pc" and entry["wake"] == "wol_via" and entry["via"] == "mini"
     assert env.configs[PROFILES / "pc" / "config.yaml"]["terminal"]["ssh_host"] == "203.0.113.2"
-    assert PROFILES / "flota-escritorio" / "config.yaml" not in env.configs
+    assert PROFILES / "flota-studio" / "config.yaml" not in env.configs
 
 
 def test_add_ship_name_override_and_name_clashes(env):
@@ -510,3 +536,121 @@ def test_join_check_lists_wake_options(env, monkeypatch):
     assert list(options) == ["wol", "wol_via", "none"] and options["wol"]["ok"] is False
     monkeypatch.setattr(cli, "_local_net", lambda os_name: {"reason": "no LAN"})
     assert {o["id"]: o for o in cli.join_check()["wake_options"]}["wol"]["ok"] is False
+
+
+# --- codes: each mistake has its own message, exit 2, nothing written ------------------------------
+
+def _run(*argv):
+    parser = argparse.ArgumentParser(prog="hermes flota")
+    cli.setup_parser(parser)
+    args = parser.parse_args(list(argv))
+    return args.func(args)
+
+
+def test_wrong_kind_reused_expired_and_garbled_codes_are_told_apart(env, capsys, monkeypatch):
+    invite = cli.run_invite()["code"]
+    ship = _ship_code(env)
+    before = copy.deepcopy(env.configs)
+    assert _run("add-ship", invite) == 2
+    assert capsys.readouterr().err.startswith("✗ that is an invite, not a ship code")
+    assert _run("join", ship, "--yes") == 2
+    assert capsys.readouterr().err.startswith("✗ that is a ship code, not an invite")
+    assert _run("join", invite[:60], "--yes") == 2
+    assert "damaged" in capsys.readouterr().err
+    assert _run("join", "hello", "--yes") == 2
+    assert "not a Flota code" in capsys.readouterr().err
+    assert env.configs == before and not (env.home / ".ssh" / "authorized_keys").exists()
+    assert _run("add-ship", ship) == 0
+    capsys.readouterr()
+    assert _run("add-ship", ship) == 2  # reused
+    err = capsys.readouterr().err
+    assert "already used" in err and "did not issue" not in err
+    forged = pairing.encode(pairing.SHIP_PREFIX, {"v": 1, "nonce": "Z" * 24, "name": "x", "host": "h", "user": "u"})
+    assert _run("add-ship", forged) == 2
+    err = capsys.readouterr().err
+    assert "did not issue" in err and "already used" not in err
+    late = _ship_code(env, name="late")
+    store = cli._invites_store()
+    pairing._save_invites(store, {nonce: 1 for nonce in pairing._load_invites(store)})
+    assert _run("add-ship", late) == 2
+    assert "expired" in capsys.readouterr().err
+    old = pairing.encode(pairing.INVITE_PREFIX, {**pairing.decode(pairing.INVITE_PREFIX, invite), "exp": 1})
+    assert _run("join", old, "--yes") == 2
+    assert "expired" in capsys.readouterr().err
+
+
+def test_a_lowercase_prefix_is_accepted(env):
+    invite = cli.run_invite()["code"]
+    assert pairing.read_invite(invite.replace("FLOTA1-INVITE-", "flota1-invite-"))["flagship"] == "Torre.local"
+
+
+def test_a_spent_nonce_is_forgotten_once_its_invite_would_have_expired(env):
+    store, now = env.tmp / "inv.json", [1000.0]
+    nonce = pairing.read_invite(pairing.make_invite(flagship="e", user="c", pubkey=PUB, store=store,
+                                                    now=lambda: now[0])["code"], now=lambda: now[0])["nonce"]
+    pairing.spend(nonce, store)
+    pairing.make_invite(flagship="e", user="c", pubkey=PUB, store=store, now=lambda: now[0])
+    assert nonce in pairing._load_invites(store)
+    now[0] += pairing.INVITE_TTL + 1
+    pairing.make_invite(flagship="e", user="c", pubkey=PUB, store=store, now=lambda: now[0])
+    assert nonce not in pairing._load_invites(store)
+
+
+# --- leave / uninstall when the fleet record is gone (plugin removed and installed again) --------------
+
+def test_leave_removes_flagship_keys_even_when_no_fleet_is_recorded(env, capsys):
+    _joined(env)
+    env.configs[ACTIVE] = {}  # `hermes plugins remove flota` wiped the settings
+    keys = env.ship_home / ".ssh" / "authorized_keys"
+    keys.write_text("ssh-rsa AAAAother me@laptop\n" + keys.read_text())
+    assert _run("leave", "nobody") == 2
+    assert "flota-flagship:Torre.local" in keys.read_text()
+    assert _run("leave") == 0
+    out = capsys.readouterr().out
+    assert "Torre.local" in out and "1 key line" in out and "Next:" in out
+    assert keys.read_text() == "ssh-rsa AAAAother me@laptop\n"
+    assert _run("leave") == 2
+    assert "not in a fleet" in capsys.readouterr().err
+
+
+# --- paste-ready next steps ------------------------------------------------------------------------
+
+def test_invite_and_join_end_with_the_command_to_paste(env, capsys):
+    assert _run("invite") == 0
+    out = capsys.readouterr().out
+    last = out.strip().splitlines()[-1]
+    assert last.startswith("hermes flota join FLOTA1-INVITE-") and last.endswith(" --yes")
+    assert "valid for 30 minutes (until " in out and "+00:00" not in out
+    code = last.split()[3]
+    as_ship(env)
+    assert _run("join", code) == 1  # no terminal to confirm on
+    err = capsys.readouterr().err
+    assert "Torre.local" in err and "SHA256:" in err
+    assert "No terminal to confirm on. Check the fingerprint and run again with --yes." in err
+    assert not (env.ship_home / ".ssh" / "authorized_keys").exists()
+    assert _run("join", code, "--yes") == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[-1].startswith("hermes flota add-ship FLOTA1-SHIP-") and "On the flagship" in lines[-3]
+
+
+def test_a_flagship_cannot_join_its_own_invite_or_a_fleet_while_it_leads_ships(env):
+    code = cli.run_invite()["code"]
+    with pytest.raises(pairing.PairingError, match="this same machine"):
+        cli.run_join(code)  # same home: the invite's key is this account's own
+    assert not (env.home / ".ssh" / "authorized_keys").exists()
+    as_ship(env)
+    _fleet(env, a={"host": "h", "profile": "flota-a"})
+    with pytest.raises(pairing.PairingError, match="leads 1 ship"):
+        cli.run_join(code)
+    assert not (env.ship_home / ".ssh" / "authorized_keys").exists()
+
+
+def test_add_ship_failure_gives_one_instruction_and_a_next_step(env, capsys):
+    code = _ship_code(env)
+    env.ssh_answers = {h: done(255, err="Permission denied (publickey).") for h in ("203.0.113.2", "10.0.0.5")}
+    assert _run("add-ship", code) == 1
+    err = capsys.readouterr().err
+    assert "fresh invite" not in err and err.strip().splitlines()[-1].startswith("Next:")
+    del env.ssh_answers
+    assert _run("add-ship", code) == 0
+    assert capsys.readouterr().out.strip().splitlines()[-1].startswith("Next:")

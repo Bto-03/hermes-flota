@@ -57,7 +57,9 @@ def effective(delegation_cfg: Mapping | None, plugin_settings: Mapping | None) -
     for name, entry in _mapping(pick("machines")).items():
         if isinstance(entry, Mapping):  # anything else is left for load_machines to report
             entry = dict(entry)
-            entry.setdefault("sleep", panel.get("sleep_action", "suspend"))
+            # Never auto-sleep by default what Flota could not turn on again.
+            wakes = _wake_of(entry) not in ("", "none") or entry.get("wake_timer") is True
+            entry.setdefault("sleep", panel.get("sleep_action", "suspend") if wakes else "none")
             # `sleep: none` means "never auto-sleep"; a default idle time would only raise a config warning.
             if entry["sleep"] != "none" or entry.get("sleep_command"):
                 entry.setdefault("sleep_after", panel.get("sleep_after", "10m"))

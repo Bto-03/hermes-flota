@@ -3,7 +3,7 @@
   "label": "Flota",
   "description": "Your machines: see which are on, wake, sleep or power them off, and add new ones.",
   "icon": "Cpu",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "tab": { "path": "/flota", "position": "after:plugins" },
   "entry": "dist/index.js",
   "css": "dist/style.css",

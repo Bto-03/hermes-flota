@@ -3,6 +3,7 @@
 It also publishes how busy each machine is to ``<hermes home>/flota/state.json`` so that
 ``hermes flota`` and the dashboard, which run in other processes, can refuse to sleep a busy machine.
 """
+import contextvars
 import json
 import logging
 import os
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 _STALE_AFTER = 600.0
 _GOING_DOWN_FOR = 60.0  # a sleep sent this recently may not have taken the machine down yet
 _STATE_VALID_FOR = 86400.0  # a state file older than this is not trusted, even if its pid is alive
+_RECHECK = 60.0  # after a failed auto-sleep: look again this much later, once
 
 
 def state_path() -> Path:
@@ -52,28 +54,59 @@ def read_busy(path: Path | None = None, *, now=time.time, alive=pid_alive) -> di
         return None
 
 
+def auto_sleeps(machine) -> bool:
+    return machine.sleep_after > 0 and (machine.sleep != "none" or bool(machine.sleep_command))
+
+
+def _is_up(host, port) -> bool:
+    from .wake import is_up
+    return is_up(host, port)
+
+
+def _armed_at(name):
+    from .waketimer import armed_at
+    return armed_at(name)
+
+
 class IdleSleeper:
     def __init__(self, run=subprocess.run, timer=threading.Timer, clock=time.monotonic,
-                 state_file=None, wall=time.time, pid=os.getpid):
+                 state_file=None, wall=time.time, pid=os.getpid, probe=_is_up, armed_at=_armed_at,
+                 reload=None):
         self._run, self._timer, self._clock = run, timer, clock
+        self._probe, self._armed_at = probe, armed_at
+        self._reload = reload  # name -> the Machine as configured now (None: removed), or None
         self._state_file, self._wall, self._pid = state_file, wall, pid  # state_file: () -> Path
         self._published = None  # busy counts last written
         self._lock = threading.Lock()
-        self._expected = []  # (goal, machine, routed_at), oldest first
+        self._expected = []  # (goal, machine, routed_at, thread, task index), oldest first
         self._running = {}  # child_session_id -> machine
         self._timers = {}  # machine name -> pending sleep timer
         self._claims = {}  # machine name -> routes being prepared (provider claim, not released)
+        self._recovered = False
         self._down = {}  # machine name -> clock() when a sleep was sent
 
     def routed(self, machine, task) -> None:
+        if self._reload and not self._recovered:
+            # First delegation of this process: what a restarted gateway left busy gets its timer.
+            # Not at load, where a short-lived `hermes flota ...` would take the file and exit.
+            self._recovered = True
+            self.recover(self._reload)
         with self._lock:
-            now = self._clock()
-            # shortcut: an expectation whose child never starts (child build failed) is only
-            # cleared here once stale, so its machine is left awake until the next route+stop
-            # cycle, upgrade when Hermes passes the route label to subagent_start.
-            self._expected = [e for e in self._expected if now - e[2] <= _STALE_AFTER]
+            now, me, index = self._clock(), threading.get_ident(), task.get("index")
+
+            # An expectation whose child never started (core refused the task after routing it):
+            # stale, or left on this thread by an earlier delegate_task call. One call routes its
+            # tasks in index order, so an index that does not grow is a new call.
+            def dead(e) -> bool:
+                return now - e[2] > _STALE_AFTER or (
+                    e[3] == me and isinstance(index, int) and isinstance(e[4], int) and e[4] >= index)
+
+            dropped = [e[1] for e in self._expected if dead(e)]
+            self._expected = [e for e in self._expected if not dead(e)]
             self._cancel_timer(machine.name)
-            self._expected.append((task.get("goal"), machine, now))
+            self._expected.append((task.get("goal"), machine, now, me, index))
+            for left_awake in dropped:
+                self._watch(left_awake)
             self._publish()
 
     def claim(self, machine) -> bool:
@@ -104,8 +137,11 @@ class IdleSleeper:
     def on_start(self, **kw) -> None:
         try:
             with self._lock:
-                goal = kw.get("child_goal")
-                entry = next((e for e in self._expected if e[0] == goal), None)
+                goal, me = kw.get("child_goal"), threading.get_ident()
+                # core fires this hook on the thread that routed the task; the goal alone is the
+                # fallback (two sessions may route the same goal text to different machines).
+                same_goal = [e for e in self._expected if e[0] == goal]
+                entry = next((e for e in same_goal if e[3] == me), same_goal[0] if same_goal else None)
                 if entry:
                     self._expected.remove(entry)
                     self._running[kw.get("child_session_id")] = entry[1]
@@ -118,16 +154,57 @@ class IdleSleeper:
             with self._lock:
                 machine = self._running.pop(kw.get("child_session_id"), None)
                 self._publish()
-                if (machine is None or self._busy(machine.name)
-                        or not (machine.sleep_after > 0
-                                and (machine.sleep != "none" or machine.sleep_command))):
-                    return
-                timer = self._timer(machine.sleep_after, lambda: self._sleep_if_idle(machine, timer))
-                timer.daemon = True
-                self._timers[machine.name] = timer
-                timer.start()
+                if machine is not None:
+                    self._watch(machine)
         except Exception:
             logger.warning("flota: subagent_stop hook failed", exc_info=True)
+
+    def watch(self, machine, delay: float = 0.0, retry: bool = True) -> None:
+        """Start the idle timer of a machine that is awake with no subagent on it (woken by hand,
+        its task refused, ...). It always gets a whole ``sleep_after``; a busy machine is left
+        alone. With ``delay``: look again that much later and only start the timer if the machine
+        answers then, so one that someone turns on afterwards is never slept early."""
+        with self._lock:
+            self._watch(machine, delay, retry)
+
+    def _watch(self, machine, delay: float = 0.0, retry: bool = True) -> None:
+        if self._busy(machine.name) or not auto_sleeps(machine):
+            return
+        self._cancel_timer(machine.name)
+        after, then = (delay, self._watch_if_up) if delay > 0 else (machine.sleep_after, self._sleep_if_idle)
+        ctx = contextvars.copy_context()  # the timer thread reads this profile's home, not the process's
+        timer = self._timer(after, lambda: ctx.run(then, machine, timer, retry))
+        timer.daemon = True
+        self._timers[machine.name] = timer
+        timer.start()
+
+    def _watch_if_up(self, machine, timer, retry) -> None:
+        with self._lock:
+            if self._timers.get(machine.name) is not timer:
+                return
+            del self._timers[machine.name]
+        if self._probe(machine.host, machine.port):
+            self.watch(machine, retry=retry)
+
+    def recover(self, lookup, alive=pid_alive) -> None:
+        """At start-up: machines a dead process (a restarted gateway) left busy get their idle timer.
+        ``lookup``: name -> Machine or None. Never raises."""
+        try:
+            if self._state_file is None:
+                return
+            data = json.loads(Path(self._state_file()).read_text())
+            pid, names = data["pid"], list(data["busy"])
+            if not names or self._wall() - data["updated"] > _STATE_VALID_FOR or (
+                    pid != self._pid() and alive(pid)):
+                return
+            with self._lock:
+                self._publish()  # claim the file, so only one process recovers it
+                for name in names:
+                    machine = lookup(name)
+                    if machine is not None:
+                        self._watch(machine)
+        except Exception:
+            logger.debug("flota: nothing to recover from the busy state file", exc_info=True)
 
     def active(self) -> dict[str, int]:
         with self._lock:
@@ -182,9 +259,26 @@ class IdleSleeper:
             with self._lock:  # it did not go down, so routes need not wait for it
                 if self._down.get(machine.name) == sent:
                     del self._down[machine.name]
+        elif action != "poweroff":
+            self._watch_alarm(machine)
         return line
 
-    def _sleep_if_idle(self, machine, timer) -> None:
+    def _watch_alarm(self, machine) -> None:
+        """A machine that wakes itself for a cron job is watched from that job on: the job may
+        never delegate to it. Real work (claim/routed) cancels this like any other timer."""
+        try:
+            from . import waketimer
+            armed = self._armed_at(machine.name) if waketimer.uses_timer(machine) else None
+            if armed is not None and armed > self._wall():
+                self.watch(machine, delay=armed - self._wall() + machine.timer_lead)
+        except Exception:
+            logger.debug("flota: could not watch %s's wake timer", machine.name, exc_info=True)
+
+    def _sleep_if_idle(self, machine, timer, retry=True) -> None:
+        try:  # the panel may have changed since the timer started
+            fresh = self._reload(machine.name) if self._reload else machine
+        except Exception:
+            fresh = machine
         with self._lock:
             # cancel() cannot stop a timer that already fired. Work arrives through claim() or
             # routed(), which drop the timer, so still being registered means still idle. Deciding
@@ -192,9 +286,14 @@ class IdleSleeper:
             if self._timers.get(machine.name) is not timer or self._busy(machine.name):
                 return
             del self._timers[machine.name]
+            if fresh is None or not auto_sleeps(fresh):
+                return
+            machine = fresh
             sent = self._down[machine.name] = self._clock()
         line = self._send(machine, power.default_action(machine), sent)
         if " failed: " in line:
             logger.warning("flota: auto-sleep %s", line)
+            if retry:  # once: a hiccup must not leave it on all night
+                self.watch(machine, delay=_RECHECK, retry=False)
         else:
             logger.info("flota: auto-sleep %s", line)

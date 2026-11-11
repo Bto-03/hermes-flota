@@ -38,15 +38,15 @@ BOT_META = "ui_meta:\n  hermes-bots:\n    title: Hermes\n    color: hsl(270 68% 
 
 
 def test_hub_crew_lists_bots_and_skips_flota_profiles(tmp_path):
-    profiles = [("default", _profile(tmp_path, "root", meta="ui_meta:\n  hermes-bots:\n    title: escriotrio\n")),
-                ("asistente", _profile(tmp_path, "asistente", meta=BOT_META, avatar=b"PNG")),
+    profiles = [("default", _profile(tmp_path, "root", meta="ui_meta:\n  hermes-bots:\n    title: deckhand\n")),
+                ("aide", _profile(tmp_path, "aide", meta=BOT_META, avatar=b"PNG")),
                 ("flota-d2", _profile(tmp_path, "flota-d2", meta=BOT_META)),
                 ("bare", _profile(tmp_path, "bare", soul=False)),
                 ("writer", _profile(tmp_path, "writer", meta="display_name: Escritor\n", soul=False))]
     bots = crew.hub_crew(profiles, alive=lambda pid: False, ship_hands={"flota-d2"})
-    assert [b["id"] for b in bots] == ["default", "asistente", "writer"]
-    assert bots[0]["name"] == "escriotrio" and bots[0]["color"] is None and bots[0]["avatar"] is None
-    assert bots[1] == {"id": "asistente", "name": "Hermes", "avatar": "data:image/png;base64,UE5H",
+    assert [b["id"] for b in bots] == ["default", "aide", "writer"]
+    assert bots[0]["name"] == "deckhand" and bots[0]["color"] is None and bots[0]["avatar"] is None
+    assert bots[1] == {"id": "aide", "name": "Hermes", "avatar": "data:image/png;base64,UE5H",
                        "color": "hsl(270 68% 58%)", "state": "asleep"}
     assert bots[2]["name"] == "Escritor"
 
@@ -109,3 +109,25 @@ def test_hub_crew_includes_every_real_bot_but_not_flota_plumbing(tmp_path):
     assert report["flota-dev"] == (False, "flota plumbing, no bot title")
     assert report["flota-torre"] == (False, "ship hand of a registered machine")
     assert report["pic"] == (True, "avatar")
+
+
+@pytest.mark.parametrize("value, kept", [
+    ("#ff8800", True), ("#fff", True), ("rebeccapurple", True), ("hsl(270 68% 58%)", True), ("rgba(1, 2, 3, 0.5)", True),
+    ("oklch(0.7 0.1 200 / 50%)", True), ("url(https://evil.example/x.png)", False), ("var(--x)", False),
+    ("red; background: url(x)", False), ("rgb(url(x))", False), ("#12", False), ("", False), (None, False), (7, False),
+])
+def test_only_plain_colours_reach_the_page(value, kept):
+    assert crew.safe_color(value) == (value if kept else None)
+
+
+def test_avatars_are_inline_images_of_bounded_size_and_lists_are_capped():
+    assert crew.safe_avatar("data:image/png;base64,UE5H") == "data:image/png;base64,UE5H"
+    assert crew.safe_avatar("data:image/svg+xml;base64,PHN2Zy8+") is not None
+    for bad in ("https://evil.example/a.png", "http://10.0.0.1/a", "data:text/html;base64,PGI+", "javascript:alert(1)",
+                "data:image/png;base64," + "A" * (crew.AVATAR_CAP * 2), "data:image/png,raw", None, 3):
+        assert crew.safe_avatar(bad) is None
+    rows = crew.clean_crew([{"id": "x" * 500, "name": "n" * 500, "color": "url(x)", "avatar": "https://e/x", "state": "awake"},
+                            "junk", None] + [{"id": f"b{i}"} for i in range(500)])
+    assert len(rows) == crew.MAX_CREW and len(rows[0]["name"]) == crew.NAME_CAP and len(rows[0]["id"]) == 160
+    assert rows[0]["color"] is None and rows[0]["avatar"] is None and rows[0]["state"] == "awake"
+    assert rows[1]["name"] == "b0" and crew.clean_crew(None) == [] and crew.clean_crew("abc") == []

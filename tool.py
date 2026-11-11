@@ -14,6 +14,7 @@ SCHEMA = {
         "The user's own machines that subagents can run on. Use it to check which machines are on, "
         "to wake one ahead of work, or to put one to sleep or power it off when the user asks "
         "(only machines with a wake method can be powered off; the others can only sleep). "
+        "A machine with running subagents is never put to sleep or powered off from here. "
         "Delegating a task with `machine` already wakes that machine automatically, so you do not "
         "need to wake it first."),
     "parameters": {
@@ -23,9 +24,6 @@ SCHEMA = {
                        "description": "status: list machines, whether each is up and its running "
                                       "subagents. wake / sleep / off: act on `machine`."},
             "machine": {"type": "string", "description": "Machine name, required for wake, sleep and off."},
-            "force": {"type": "boolean",
-                      "description": "Sleep or power off even though subagents are running on it. "
-                                     "Only when the user explicitly asks."},
         },
         "required": ["action"],
     },
@@ -65,24 +63,26 @@ def handle(args: Mapping, *, settings: Mapping, probe, ensure, power, sleeper=No
                                f"{', '.join(machines) or 'none'}.")
         if action == "wake":
             try:
-                return _json(machine=machine.name, up=True, waited_s=round(ensure(machine), 1))
+                waited = round(ensure(machine), 1)
             except Exception as exc:  # WakeError, or a wake command that blew up
                 return _json(machine=machine.name, error=str(exc))
+            if sleeper is not None:  # woken with no subagent on it: it still gets its idle timer
+                sleeper.watch(machine)
+            return _json(machine=machine.name, up=True, waited_s=waited)
         if action == "off" and settings.get("allow_power_off") is False:
             return _json(machine=machine.name, error="Powering off is disabled; the user can enable "
                          "allow_power_off in the Flota plugin settings. Use action 'sleep' instead.")
         if action == "off" and not settings_mod.can_power_off(machine, settings):
             return _json(machine=machine.name, error=settings_mod.no_wake_message(machine.name))
-        force = args.get("force") is True
+        # No `force` here: a model (or text injected into it) never stops a working machine.
         busy = (running or {}).get(machine.name, 0)
-        if busy and not force:
+        if busy:
             return _json(machine=machine.name, error=f"{machine.name} is busy with {busy} running "
-                         "subagent(s); pass force: true only if the user wants it stopped anyway.")
-        if sleeper is not None and not force:  # the sleeper also counts routes not started yet
+                         "subagent(s), so it was left on. Only the user can stop it anyway: "
+                         f"`hermes flota {action} {machine.name} --force` in a terminal, or the Flota page.")
+        if sleeper is not None:  # the sleeper also counts routes not started yet
             return _json(machine=machine.name, result=sleeper.sleep_now(machine)
                          if action == "sleep" else sleeper.sleep_now(machine, "poweroff"))
-        if sleeper is not None:
-            sleeper.mark_down(machine)  # drop its timer; routes wait for it to go down
         return _json(machine=machine.name,
                      result=power(machine, "poweroff" if action == "off" else _sleep_action(machine)))
     except Exception as exc:  # a tool answers with an error, never a traceback
@@ -91,7 +91,9 @@ def handle(args: Mapping, *, settings: Mapping, probe, ensure, power, sleeper=No
 
 def _load_config() -> Mapping:
     from hermes_cli.config import load_config_readonly
-    return load_config_readonly()
+    from .home import owner_scope
+    with owner_scope():  # a flota-<machine> profile holds a stale copy of the fleet
+        return load_config_readonly()
 
 
 def _effective(config: Mapping) -> dict:

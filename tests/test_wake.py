@@ -348,13 +348,13 @@ def _timer_ensure(world, m, armed, wall=5000.0):
 
 def test_timer_machine_already_up():
     world = World(boots_after=0)
-    assert _timer_ensure(world, machine(wake="timer", name="escritorio"), None) == 0.0
+    assert _timer_ensure(world, machine(wake="timer", name="studio"), None) == 0.0
 
 
 def test_timer_machine_without_a_timer_fails_at_once_and_is_never_woken():
     world = World(boots_after=5)
-    with pytest.raises(w.WakeError, match="escritorio sleeps until you turn it on"):
-        _timer_ensure(world, machine(wake="timer", name="escritorio"), None)
+    with pytest.raises(w.WakeError, match="studio sleeps until you turn it on"):
+        _timer_ensure(world, machine(wake="timer", name="studio"), None)
     assert world.wakes == [] and world.sleeps == []
 
 
@@ -362,22 +362,22 @@ def test_timer_machine_far_from_its_timer_names_the_time():
     import time as _time
     armed = _time.mktime((2027, 1, 15, 2, 0, 0, 0, 0, -1))
     world = World(boots_after=5)
-    with pytest.raises(w.WakeError, match="escritorio sleeps until its wake timer at 02:00 "
+    with pytest.raises(w.WakeError, match="studio sleeps until its wake timer at 02:00 "
                                           "or until you turn it on"):
-        _timer_ensure(world, machine(wake="timer", name="escritorio"), armed, wall=armed - 3600)
+        _timer_ensure(world, machine(wake="timer", name="studio"), armed, wall=armed - 3600)
     assert world.wakes == [] and world.sleeps == []
 
 
 def test_timer_machine_waits_when_its_timer_is_due_within_wake_timeout():
     world = World(boots_after=30)
-    m = machine(wake="timer", name="escritorio", wake_timeout=90.0)
+    m = machine(wake="timer", name="studio", wake_timeout=90.0)
     assert _timer_ensure(world, m, 5000.0 + 20, wall=5000.0) == 30.0
     assert world.wakes == []  # it cannot be woken, only waited for
 
 
 def test_timer_machine_that_does_not_come_up_in_time():
     world = World()
-    m = machine(wake="timer", name="escritorio", wake_timeout=10.0)
+    m = machine(wake="timer", name="studio", wake_timeout=10.0)
     with pytest.raises(w.WakeError, match="wake timer"):
         _timer_ensure(world, m, 5000.0 - 5, wall=5000.0)  # just fired, still resuming
     assert world.wakes == []

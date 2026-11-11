@@ -11,7 +11,7 @@ import pytest
 from flota_plugin import remote_crew
 from flota_plugin.machines import Machine
 
-M = Machine(name="escritorio", profile="flota-escritorio", host="10.0.0.9", user="alice")
+M = Machine(name="studio", profile="flota-studio", host="10.0.0.9", user="alice")
 PNG = base64.b64encode(b"\x89PNG tiny").decode()
 
 
@@ -29,14 +29,14 @@ def _run(stdout="", returncode=0, calls=None):
 
 def test_scan_is_one_batchmode_ssh_call_with_the_script_on_stdin():
     calls = []
-    bots = remote_crew.scan(M, run=_run(_out([{"id": "asistente", "name": "Hermes", "color": "hsl(270 68% 58%)",
+    bots = remote_crew.scan(M, run=_run(_out([{"id": "aide", "name": "Hermes", "color": "hsl(270 68% 58%)",
                                                   "avatar_b64": PNG, "mime": "image/png", "gateway_alive": True,
                                                   "active_agents": 2}]), calls=calls))
     assert len(calls) == 1
     argv, kw = calls[0]
     assert argv[:3] == ["ssh", "-o", "BatchMode=yes"] and argv[-2:] == ["alice@10.0.0.9", "sh -s"]
     assert kw["input"] == remote_crew.SCRIPT and kw["timeout"] == 8
-    assert bots == [{"id": "asistente", "name": "Hermes", "color": "hsl(270 68% 58%)", "avatar_b64": PNG,
+    assert bots == [{"id": "aide", "name": "Hermes", "color": "hsl(270 68% 58%)", "avatar_b64": PNG,
                      "mime": "image/png", "gateway_alive": True, "active_agents": 2}]
 
 
@@ -92,14 +92,14 @@ def test_remote_script_reads_no_secrets():
 def _home(tmp_path):
     root = tmp_path / "hermes"
     (root / "assets").mkdir(parents=True)
-    (root / "profile.yaml").write_text("ui_meta:\n  hermes-bots:\n    title: escriotrio\n")
+    (root / "profile.yaml").write_text("ui_meta:\n  hermes-bots:\n    title: deckhand\n")
     (root / "SOUL.md").write_text("x")
     (root / "assets" / "avatar.png").write_bytes(b"PNG")
     (root / ".env").write_text("SECRET=1")
     (root / "gateway.lock").write_text(json.dumps({"pid": os.getpid()}))
     (root / "gateway_state.json").write_text(json.dumps({"pid": os.getpid(), "active_agents": 3}))
     p = root / "profiles"
-    for name, meta in (("asistente", "description: x  # c\nui_meta:\n  hermes-bots:\n    color: 'hsl(270 68% 58%)'\n"
+    for name, meta in (("aide", "description: x  # c\nui_meta:\n  hermes-bots:\n    color: 'hsl(270 68% 58%)'\n"
                                      "    title: Hermes\n"),
                        ("writer", "display_name: Escritor\n"), ("flota-dev", None), ("flota-lab", "display_name: Lab\n"),
                        ("bare", None), ("big", "display_name: Big\n")):
@@ -108,7 +108,7 @@ def _home(tmp_path):
             (p / name / "profile.yaml").write_text(meta)
     (p / "flota-dev" / "SOUL.md").write_text("x")
     (p / "flota-dev" / "assets" / "avatar.png").write_bytes(b"PNG")
-    (p / "asistente" / "gateway.lock").write_text(json.dumps({"pid": 999999999}))
+    (p / "aide" / "gateway.lock").write_text(json.dumps({"pid": 999999999}))
     (p / "big" / "assets" / "avatar.webp").write_bytes(b"x" * (remote_crew.AVATAR_MAX + 1))
     return root
 
@@ -117,16 +117,16 @@ def _home(tmp_path):
 def test_the_remote_script_lists_the_bots_of_a_hermes_home(tmp_path, which):
     root = _home(tmp_path)
     script = remote_crew.SCRIPT if which == "python" else remote_crew._SH_FALLBACK
-    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "HERMES_HOME": str(root / "profiles" / "asistente")}
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "HERMES_HOME": str(root / "profiles" / "aide")}
     done = subprocess.run(["sh", "-s"], input=script, capture_output=True, text=True, timeout=30, env=env)
     assert done.returncode == 0, done.stderr
     data = remote_crew.parse(done.stdout)
     by = {b["id"]: b for b in data["bots"]}
-    assert list(by) == ["default", "asistente", "big", "flota-lab", "writer"]
-    assert by["default"]["name"] == "escriotrio" and by["default"]["gateway_alive"] is True
+    assert list(by) == ["default", "aide", "big", "flota-lab", "writer"]
+    assert by["default"]["name"] == "deckhand" and by["default"]["gateway_alive"] is True
     assert by["default"]["active_agents"] == 3
-    assert by["asistente"]["name"] == "Hermes" and by["asistente"]["color"] == "hsl(270 68% 58%)"
-    assert by["asistente"]["gateway_alive"] is False
+    assert by["aide"]["name"] == "Hermes" and by["aide"]["color"] == "hsl(270 68% 58%)"
+    assert by["aide"]["gateway_alive"] is False
     assert by["writer"]["name"] == "Escritor" and by["big"]["avatar_b64"] is None
     if which == "python":
         assert by["default"]["avatar_b64"] == base64.b64encode(b"PNG").decode() and by["default"]["mime"] == "image/png"
@@ -166,7 +166,7 @@ def test_first_get_returns_nothing_and_refreshes_in_the_background():
     assert cache.get(M, True) is None and len(spawned) == 1 and calls == []
     assert cache.get(M, True) is None and len(spawned) == 1  # one refresh in flight
     spawned.pop()()
-    assert cache.get(M, True) == one and calls == ["escritorio"]
+    assert cache.get(M, True) == one and calls == ["studio"]
 
 
 def test_cache_lasts_120s_then_refreshes():
@@ -175,7 +175,7 @@ def test_cache_lasts_120s_then_refreshes():
     cache, calls = _cache([one, two], clock)
     assert cache.get(M, True) == one
     clock.now += 119
-    assert cache.get(M, True) == one and calls == ["escritorio"]
+    assert cache.get(M, True) == one and calls == ["studio"]
     clock.now += 2
     assert cache.get(M, True) == two and len(calls) == 2
 
@@ -208,9 +208,9 @@ def test_windows_machines_are_not_scanned():
 # --- crew entries ----------------------------------------------------------------------------------------
 
 BOTS = {"hostname": "desk-pc", "bots": [
-    {"id": "asistente", "name": "Hermes", "color": "red", "avatar_b64": PNG, "mime": "image/png",
+    {"id": "aide", "name": "Hermes", "color": "red", "avatar_b64": PNG, "mime": "image/png",
      "gateway_alive": True, "active_agents": 0},
-    {"id": "default", "name": "escriotrio", "color": None, "avatar_b64": None, "mime": None,
+    {"id": "default", "name": "deckhand", "color": None, "avatar_b64": None, "mime": None,
      "gateway_alive": True, "active_agents": 1},
     {"id": "writer", "name": "Escritor", "color": None, "avatar_b64": None, "mime": None,
      "gateway_alive": False, "active_agents": 0}]}
@@ -218,19 +218,25 @@ BOTS = {"hostname": "desk-pc", "bots": [
 
 def test_crew_entries_states_and_avatar():
     rows = remote_crew.crew_entries(M, BOTS, up=True)
-    assert [(r["id"], r["state"]) for r in rows] == [("escritorio/asistente", "awake"), ("escritorio/default", "working"),
-                                                     ("escritorio/writer", "asleep")]
-    assert rows[0] == {"id": "escritorio/asistente", "profile": "asistente", "name": "Hermes",
+    assert [(r["id"], r["state"]) for r in rows] == [("studio/aide", "awake"), ("studio/default", "working"),
+                                                     ("studio/writer", "asleep")]
+    assert rows[0] == {"id": "studio/aide", "profile": "aide", "name": "Hermes",
                        "avatar": f"data:image/png;base64,{PNG}", "color": "red", "state": "awake", "remote": True,
-                       "machine": "escritorio", "hostname": "desk-pc"}
+                       "machine": "studio", "hostname": "desk-pc"}
     assert {r["state"] for r in remote_crew.crew_entries(M, BOTS, up=False)} == {"asleep"}
     assert remote_crew.crew_entries(M, None, up=True) == []
 
 
 def test_merge_keeps_the_ship_hand_and_replaces_matching_placeholders():
-    existing = [{"id": "flota-escritorio", "name": "escritorio", "ship_hand": True},
-                {"id": "escritorio/Hermes", "name": "Hermes", "ship_hand": False},
-                {"id": "escritorio/Lia", "name": "Lia", "ship_hand": False}]
+    existing = [{"id": "flota-studio", "name": "studio", "ship_hand": True},
+                {"id": "studio/Hermes", "name": "Hermes", "ship_hand": False},
+                {"id": "studio/Lia", "name": "Lia", "ship_hand": False}]
     merged = remote_crew.merge(existing, remote_crew.crew_entries(M, BOTS, up=True) * 2)
-    assert [b["id"] for b in merged] == ["flota-escritorio", "escritorio/Lia", "escritorio/asistente",
-                                         "escritorio/default", "escritorio/writer"]
+    assert [b["id"] for b in merged] == ["flota-studio", "studio/Lia", "studio/aide",
+                                         "studio/default", "studio/writer"]
+
+
+def test_a_ship_cannot_send_a_colour_that_fetches_a_url():
+    ok = remote_crew._bot({"id": "chef", "name": "Chef", "color": "hsl(20 80% 50%)"})
+    bad = remote_crew._bot({"id": "chef", "name": "Chef", "color": "url(//evil.example/x)"})
+    assert ok["color"] == "hsl(20 80% 50%)" and bad["color"] is None

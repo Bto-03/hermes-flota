@@ -30,7 +30,8 @@ const FLEETS_KEY = [ID, 'fleets']
 const NET_KEY = [ID, 'net']
 const NET_POLL_MS = 30000
 const ROLE_STORE = 'flota.role'
-const EMPTY_SCHEDULE = 'No scheduled jobs. Ask Hermes to schedule one (e.g. "every night at 2 run the backup on escritorio") and Flota will wake that machine for it.'
+const OFFLINE_POLL_MS = 30000
+const EMPTY_SCHEDULE = 'No scheduled jobs. Ask Hermes to schedule one (e.g. "every night at 2 run the backup on studio") and Flota will wake that machine for it.'
 const SETUP_HINT = 'hermes flota setup <name> --host <ip> --user <user>'
 const BACKEND_OFF = 'Enable the Flota plugin on this Hermes (Plugins) and restart its gateway.'
 const UPDATE_NOTE = 'This Flota backend is older and cannot do this yet. Update the Flota plugin on this Hermes and restart its gateway.'
@@ -39,7 +40,7 @@ const MACHINE_TIP = 'Machine registered in this fleet'
 const NO_BOTS = 'no bots on this machine'
 const PLUGINS_PAGE = '/capabilities?tab=plugins&plugin=flota'
 
-/** A ship's hostname when it says more than its fleet name: 'desk-pc' for 'escritorio'. */
+/** A ship's hostname when it says more than its fleet name: 'desk-pc' for 'studio'. */
 export function hostLabel(m) {
   const h = String((m && m.hostname) || '').trim()
   return h && h.toLowerCase() !== String((m && m.name) || '').toLowerCase() ? h : ''
@@ -567,6 +568,7 @@ export function parseError(err) {
   let problems = []
   let needs
   let fleet
+  let flagship
   try {
     const body = JSON.parse(message)
     const detail = body && 'detail' in body ? body.detail : body
@@ -582,9 +584,10 @@ export function parseError(err) {
     if (body && typeof body === 'object') {
       needs = needs || body.needs || undefined
       fleet = fleet || body.fleet || undefined
+      if (typeof body.flagship === 'string') flagship = body.flagship
     }
   } catch { /* not JSON: keep the text */ }
-  return { status, message: message || text, problems, needs, fleet }
+  return { status, message: message || text, problems, needs, fleet, flagship }
 }
 
 /** What kind of failure an error is, so the page never calls a backend 'older' by mistake:
@@ -659,8 +662,15 @@ export function usageMachines(text) {
   return m[1].split(',').map(s => s.trim()).filter(Boolean)
 }
 
+/** Only Flota's own help counts ('Usage: /flota …' then 'Machines: …'); a Hermes answering
+ *  'Unknown command /flota' is not a flagship. */
+export const isFlotaHelp = text => /^Usage: \/flota\b/m.test(String(text || '')) && /^Machines:/m.test(String(text || ''))
+
 /** Ask the other connections whether they run Flota. Returns { supported, tried, found } where
- *  found = { route, label, machines, sameConnection } (a flagship with ships first), or null. */
+ *  found = { route, label, machines, sameConnection } (the last one opened, else a flagship with
+ *  ships, first), or null, and all = every connection that answered. Each dial may cold-start that
+ *  backend (the SDK does not say which are running), so it runs once per minute at most and only
+ *  while this connection has no Flota. */
 export async function findFlagship(sdk = host, net = null, scope = null, { timeoutMs = 6000 } = {}) {
   if (!sdk || typeof sdk.requestProfile !== 'function') return { supported: false, tried: 0, found: null }
   const cands = probeCandidates(net && net.routes, scope)
@@ -668,15 +678,17 @@ export async function findFlagship(sdk = host, net = null, scope = null, { timeo
     try {
       const res = await withTimeout(sdk.requestProfile(route, 'command.dispatch', { name: 'flota', arg: 'help' }, timeoutMs), timeoutMs + 500)
       const out = String((res && (res.output != null ? res.output : res.text)) || '')
-      return /\/flota\b/.test(out) ? { route, machines: usageMachines(out) } : null
+      return isFlotaHelp(out) ? { route, machines: usageMachines(out) } : null
     } catch { return null }
-  }))).filter(Boolean)
-  const best = hits.find(h => h.machines.length) || hits[0] || null
-  if (!best) return { supported: true, tried: cands.length, found: null }
-  const link = ((net && net.links) || []).find(l => l.id === best.route.connectionId)
-  const local = best.route.connectionId === 'local' || (link && link.kind === 'local')
-  return { supported: true, tried: cands.length, found: { ...best, label: link && !local ? link.label : local ? 'this PC' : best.route.connectionId,
-    sameConnection: !!scope && scope.connectionId === best.route.connectionId } }
+  }))).filter(Boolean).map(h => {
+    const link = ((net && net.links) || []).find(l => l.id === h.route.connectionId)
+    const local = h.route.connectionId === 'local' || (link && link.kind === 'local')
+    return { ...h, label: link && !local ? link.label : local ? 'this PC' : h.route.connectionId, sameConnection: !!scope && scope.connectionId === h.route.connectionId }
+  })
+  // The one the user opened last, else a flagship with ships, else the first.
+  const last = readLast()
+  const best = hits.find(h => sameRoute(h.route, last)) || hits.find(h => h.machines.length) || hits[0] || null
+  return { supported: true, tried: cands.length, found: best, all: hits }
 }
 
 /** Make `route` the app's active connection, so ctx.rest reaches it (host.ensureAgent). */
@@ -689,6 +701,11 @@ export async function reachRoute(route, sdk = host) {
 
 const REACH_STORE = 'flota.flagshipRoute'
 export const readReach = () => { try { const v = typeof localStorage !== 'undefined' && localStorage.getItem(REACH_STORE); return v ? JSON.parse(v) : null } catch { return null } }
+/** Forget the stored route: Flota stops switching the app to the flagship on its own. */
+export const clearReach = () => { try { if (typeof localStorage !== 'undefined') localStorage.removeItem(REACH_STORE) } catch { /* private mode */ } }
+const LAST_STORE = 'flota.lastFlagship' // which of several flagships was opened last (a preference, never auto-opened)
+const readLast = () => { try { const v = typeof localStorage !== 'undefined' && localStorage.getItem(LAST_STORE); return v ? JSON.parse(v) : null } catch { return null } }
+const writeLast = route => { try { if (typeof localStorage !== 'undefined') localStorage.setItem(LAST_STORE, JSON.stringify({ connectionId: route.connectionId, profile: route.profile })) } catch { /* private mode */ } }
 const writeReach = route => { try { if (typeof localStorage !== 'undefined') localStorage.setItem(REACH_STORE, JSON.stringify({ connectionId: route.connectionId, profile: route.profile })) } catch { /* private mode */ } }
 export const sameRoute = (a, b) => !!a && !!b && a.connectionId === b.connectionId && (a.profile || 'default') === (b.profile || 'default')
 
@@ -759,7 +776,7 @@ export const CSS = `
 @media (max-width:980px){.flota-body{grid-template-columns:1fr}.flota-col{overflow:visible}}
 .flota-card{border-radius:10px;background:var(--ui-bg-card);box-shadow:inset 0 0 0 1px var(--ui-stroke-quaternary)}
 .flota-mapwrap{position:relative;min-height:440px;overflow:hidden;background:none}
-.flota-map{position:absolute;inset:0;display:block;width:100%;height:100%}
+.flota-map{position:absolute;inset:0 0 26px;display:block;width:100%;height:calc(100% - 26px);overflow:visible}
 .flota-legend{position:absolute;left:14px;bottom:12px;display:flex;gap:12px;font-size:11px;color:var(--ui-text-tertiary)}
 .flota-legend span{display:inline-flex;align-items:center;gap:5px}
 .flota-legend i{width:8px;height:8px;border-radius:50%;display:inline-block}
@@ -1039,6 +1056,8 @@ export const CSS = `
 .flota-reach-found{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .flota-checkline{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--ui-text-secondary);cursor:pointer}
 .flota-checkline input{accent-color:var(--ui-accent)}
+.flota-reach-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.flota-reach-list li{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 12px;border:1px solid var(--ui-stroke-quaternary);border-radius:8px}
 .flota-reach-ship{display:flex;flex-direction:column;gap:6px;padding-top:12px;border-top:1px solid var(--ui-stroke-quaternary)}
 .flota-errdetails{font-size:11.5px;color:var(--ui-text-tertiary)}
 .flota-errdetails summary{cursor:pointer;width:max-content}
@@ -1455,7 +1474,8 @@ export function FleetMap({ hub, machines, selected, onSelect = () => {}, onAdd, 
         ]
       }),
       ...ghosts.map((g, i) => jsxs('g', {
-        className: 'flota-ghost-g', transform: `translate(${g.x} ${g.y})`, onClick: onAdd, role: 'button', 'aria-label': 'Add machine',
+        className: 'flota-ghost-g', transform: `translate(${g.x} ${g.y})`, onClick: onAdd, role: 'button', 'aria-label': 'Add machine', tabIndex: i === 0 ? 0 : -1,
+        onKeyDown: e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onAdd && onAdd() } },
         children: [jsx('circle', { className: 'flota-ghost', r: 28 }), jsx('path', { className: 'flota-ghost-plus', d: 'M-7 0h14M0 -7v14' }),
           i === 0 && jsx('text', { className: 'flota-state', y: -44, textAnchor: 'middle', children: 'Add machine' })]
       }, `g${i}`)),
@@ -1877,19 +1897,24 @@ export function SchedulePanel({ data, error, rows, machines, hubName, selected, 
 
 // --- add ships: by address (one-click setup) or by invite ------------------------------------
 
-const BLANK = { name: '', host: '', user: '', key: '', description: '', mac: '', broadcast: '', wake: 'wol', sleep: 'suspend', sleep_after: '10m' }
+const SHIP_NAME = /^[a-z0-9][a-z0-9_-]{0,57}$/ // the backend's _NAME
+const BLANK = { name: '', host: '', user: '', port: '', key: '', description: '', mac: '', broadcast: '', wake: 'wol', sleep: 'suspend', sleep_after: '10m' }
 const SETUP_STEPS = ['Connecting over SSH…', 'Detecting the OS and network…', 'Looking for the MAC address for Wake-on-LAN…', 'Creating the SSH profile…', 'Saving the ship…']
 
 /** The POST /machines body for a form state, with setup: true so the backend connects, detects the
- *  OS / interface / MAC, creates the SSH profile and saves it in one go. WoL without a MAC is sent
- *  as 'none': setup switches Wake-on-LAN on once it finds the MAC. */
+ *  OS / interface / MAC, creates the SSH profile and saves it in one go. Wake-on-LAN without a MAC
+ *  sends no `wake` at all: setup then looks the MAC up over SSH and switches Wake-on-LAN on when it
+ *  finds one ('none' would be kept as the user's choice and the ship could never be woken). */
 export function machineBody(form) {
   const body = { name: form.name.trim().toLowerCase() }
   for (const key of ['host', 'user', 'key', 'description', 'mac', 'broadcast', 'sleep', 'sleep_after']) {
     const v = String(form[key] || '').trim()
     if (v) body[key] = v
   }
-  body.wake = form.wake === 'wol' && body.mac ? 'wol' : 'none'
+  const port = Number(String(form.port || '').trim())
+  if (Number.isInteger(port) && port > 0 && port !== 22) body.port = port
+  if (form.wake !== 'wol') body.wake = 'none'
+  else if (body.mac) body.wake = 'wol'
   if (body.sleep === 'none') delete body.sleep_after
   body.setup = true
   return body
@@ -1912,6 +1937,14 @@ function Progress({ steps, label }) {
   ] })
 }
 
+/** What setup ended with: can Flota wake this ship? null when the backend did not say. */
+export function wakeOutcome(done, asked) {
+  if (!done || typeof done.wake !== 'string') return null
+  if (done.wake !== 'none') return { ok: true, text: `Wake: ${done.wake === 'wol' ? 'Wake-on-LAN' : done.wake} is ready${done.mac ? ` (MAC ${done.mac})` : ''}.` }
+  if (asked !== 'wol') return { ok: true, text: 'Wake: never, as you chose. Flota uses this ship only while it is already on.' }
+  return { ok: false, text: 'Flota could not find this ship’s MAC address, so it cannot wake it yet. Add it again with the MAC under “Wake and sleep options…”, or run hermes flota setup on the flagship.' }
+}
+
 /** Add by address: the form, the running setup, then its step log. */
 export function AddressForm({ api, onDone, onBack, backLabel = 'Back', initial = {} }) {
   const [form, setForm] = useState(initial.form || BLANK)
@@ -1921,7 +1954,9 @@ export function AddressForm({ api, onDone, onBack, backLabel = 'Back', initial =
   const [done, setDone] = useState(initial.done || null)
   const set = key => e => setForm(f => ({ ...f, [key]: e && e.target ? e.target.value : e }))
   const input = (key, placeholder, extra) => jsx(Input, { value: form[key], onChange: set(key), placeholder, spellCheck: false, ...extra })
-  const ready = form.name.trim() && form.host.trim() && form.user.trim()
+  const nameOk = SHIP_NAME.test(form.name.trim().toLowerCase())
+  const ready = nameOk && form.host.trim() && form.user.trim()
+  const woke = wakeOutcome(done, form.wake)
 
   const submit = async e => {
     if (e) e.preventDefault()
@@ -1951,21 +1986,23 @@ export function AddressForm({ api, onDone, onBack, backLabel = 'Back', initial =
       jsx(StepLog, { result: done }),
       legacy && done.setup_command
         ? jsxs('div', { className: 'flota-stack', children: [jsx('div', { className: 'flota-muted', children: `${machine} is on the map. One step left: run this on the Hermes host to create its SSH profile and detect its MAC address.` }), jsx(Command, { text: done.setup_command })] })
-        : jsx('div', { className: 'flota-ok', children: `${machine} joined the fleet. It is on the map now.` })
+        : jsx('div', { className: 'flota-ok', children: `${machine} joined the fleet. It is on the map now.` }),
+      woke && jsx('div', { className: woke.ok ? 'flota-muted' : 'flota-note err', 'data-wake-result': woke.ok ? 'ok' : 'none', role: woke.ok ? undefined : 'alert', children: woke.text })
     ] })
   } else {
     body = jsxs('form', { className: 'flota-form', onSubmit: submit, id: 'flota-add-form', children: [
-      jsx(Field, { label: 'Name', hint: 'How Hermes calls it: escritorio, nas…', children: input('name', 'escritorio', { autoFocus: true, required: true }) }),
+      jsx(Field, { label: 'Name', hint: form.name.trim() && !nameOk ? 'Lowercase letters, digits, - or _ (no spaces)' : 'How Hermes calls it: studio, nas…', children: input('name', 'studio', { autoFocus: true, required: true }) }),
       jsx(Field, { label: 'SSH user', hint: 'Your account on that machine', children: input('user', 'you', { required: true }) }),
-      jsx(Field, { label: 'Host', wide: true, hint: 'IP or Tailscale address of the machine; it must accept SSH with this Hermes’ key', children: input('host', '192.0.2.20 or escritorio.tailnet.ts.net', { required: true }) }),
+      jsx(Field, { label: 'Host', wide: true, hint: 'IP or Tailscale address of the machine; it must accept SSH with this Hermes’ key', children: input('host', '192.0.2.20 or studio.tailnet.ts.net', { required: true }) }),
       jsx(Field, { label: 'SSH key (optional)', hint: 'Defaults to this Hermes’ key', children: input('key', 'path to a private key') }),
       jsx(Field, { label: 'Description (optional)', children: input('description', 'Gaming desktop with the RTX card') }),
       !more && jsx('button', { type: 'button', className: 'flota-linkbtn wide', onClick: () => setMore(true), children: 'Wake and sleep options…' }),
       more && jsx(Field, { label: 'Wake', children: jsx(SegmentedControl, { value: form.wake, onChange: set('wake'), options: [{ id: 'wol', label: 'Wake-on-LAN' }, { id: 'none', label: 'Never' }] }) }),
       more && jsx(Field, { label: 'Sleep after use', children: jsx(SegmentedControl, { value: form.sleep, onChange: set('sleep'), sizing: 'content', options: [{ id: 'suspend', label: 'Suspend' }, { id: 'hibernate', label: 'Hibernate' }, { id: 'none', label: 'Stay on' }] }) }),
-      more && form.wake === 'wol' && jsx(Field, { label: 'MAC address', children: input('mac', 'auto-detected') }),
+      more && form.wake === 'wol' && jsx(Field, { label: 'MAC address', hint: 'Leave empty: Flota reads it over SSH', children: input('mac', 'auto-detected') }),
       more && form.wake === 'wol' && jsx(Field, { label: 'Broadcast', children: input('broadcast', 'auto-detected') }),
       more && form.sleep !== 'none' && jsx(Field, { label: 'Sleep after idle', children: input('sleep_after', '10m') }),
+      more && jsx(Field, { label: 'SSH port', children: input('port', '22', { inputMode: 'numeric' }) }),
       jsx('div', { className: 'flota-muted wide', children: 'Flota connects, detects the OS, network interface and MAC, turns Wake-on-LAN on when it can, creates the SSH profile and saves the ship.' }),
       failed && jsxs('div', { className: 'flota-note err wide', role: 'alert', children: [jsx('div', { style: { marginBottom: 6 }, children: 'Setup did not finish. Fix this and try again:' }), jsx(StepLog, { result: done })] }),
       error && jsxs('div', { className: 'flota-note err wide', role: 'alert', children: [
@@ -1984,25 +2021,35 @@ export function AddressForm({ api, onDone, onBack, backLabel = 'Back', initial =
   ]
 }
 
+/** Why the backend refused to re-point a saved ship (its error names the CLI's --replace), or null. */
+export function replaceReason(error) {
+  const text = String((error && error.message) || '')
+  return /--replace/.test(text) ? text.replace(/\s*If [^.]*--replace[\s\S]*$/, '') : null
+}
+
 /** Flagship side of pairing: an invite code for the other machine, then its ship code back. */
 export function InvitePanel({ api, onDone, onBack, backLabel = 'Back', initial = {} }) {
   const [invite, setInvite] = useState(initial.invite || null) // { code, expires_at, flagship } | { error }
   const [shipCode, setShipCode] = useState(initial.shipCode || '')
+  const [shipName, setShipName] = useState(initial.shipName || '')
+  const wanted = shipName.trim().toLowerCase()
+  const nameBad = !!wanted && !SHIP_NAME.test(wanted)
   const [adding, setAdding] = useState(false)
   const [result, setResult] = useState(initial.result || null)
-  const [error, setError] = useState(null)
+  const [error, setError] = useState(initial.error || null)
+  const moved = replaceReason(error)
   const load = async () => {
     setInvite(null)
     try { setInvite(await api.invite()) } catch (err) { setInvite({ error: classifyError(err) }) }
   }
   useEffect(() => { if (!initial.invite) load() }, [])
-  const add = async e => {
+  const add = async (e, replace = false) => {
     if (e) e.preventDefault()
-    if (!shipCode.trim() || adding) return
+    if (!shipCode.trim() || adding || nameBad) return
     setAdding(true)
     setError(null)
     try {
-      const r = await api.addShip(shipCode.trim())
+      const r = await api.addShip(shipCode.trim(), wanted || undefined, replace)
       setResult(r || { ok: true })
       if (!r || r.ok !== false) queryClient.invalidateQueries({ queryKey: KEY })
     } catch (err) {
@@ -2034,18 +2081,23 @@ export function InvitePanel({ api, onDone, onBack, backLabel = 'Back', initial =
         jsx('li', { children: 'Paste the ship code it gives you here.' })
       ] }),
       jsx('form', { id: 'flota-ship-form', onSubmit: add, className: 'flota-form', children: [
-        jsx(Field, { label: 'Ship code', wide: true, children: jsx(Input, { value: shipCode, onChange: e => setShipCode(e && e.target ? e.target.value : e), placeholder: 'paste the ship code', spellCheck: false, className: 'flota-mono' }) }, 'f')
+        jsx(Field, { label: 'Ship code', wide: true, children: jsx(Input, { value: shipCode, onChange: e => setShipCode(e && e.target ? e.target.value : e), placeholder: 'paste the ship code', spellCheck: false, className: 'flota-mono' }) }, 'f'),
+        jsx(Field, { label: 'Name (optional)', wide: true, hint: nameBad ? 'Lowercase letters, digits, - or _ (no spaces)' : 'How Hermes calls this ship. Empty: the name the ship suggests.',
+          children: jsx(Input, { value: shipName, onChange: e => setShipName(e && e.target ? e.target.value : e), placeholder: 'studio', spellCheck: false, 'data-field': 'ship-name' }) }, 'n')
       ] }),
       adding && jsx(Progress, { steps: ['Checking the ship code…', 'Connecting to the ship over SSH…', 'Detecting its network…', 'Saving the ship…'] }),
       result && result.ok === false && jsxs('div', { className: 'flota-note err', role: 'alert', children: [jsx('div', { style: { marginBottom: 6 }, children: 'The ship could not be added:' }), jsx(StepLog, { result })] }),
-      error && jsx(ErrorNote, { error, what: 'add the ship' })
+      moved ? jsxs('div', { className: 'flota-note err', role: 'alert', children: [
+        jsx('div', { style: { marginBottom: 8 }, children: `The ship was not added: ${moved} If you did not move it, do not add this code.` }, 't'),
+        jsx(Button, { variant: 'outline', size: 'sm', disabled: adding, onClick: () => add(null, true), 'data-action': 'replace-ship', children: 'This machine really moved - replace it' }, 'r')
+      ] }) : error && jsx(ErrorNote, { error, what: 'add the ship' })
     ] })
   }
   const footer = ok
     ? [jsx(Button, { onClick: onDone, children: 'Done' }, 'd')]
     : [onBack && jsx(Button, { variant: 'ghost', onClick: onBack, children: backLabel }, 'b'),
       !unsupported && invite && !invite.error && jsx(Button, { variant: 'ghost', onClick: load, children: 'New code' }, 'n'),
-      !unsupported && jsx(Button, { type: 'submit', form: 'flota-ship-form', disabled: adding || !shipCode.trim(), children: adding ? 'Adding…' : 'Add ship' }, 'a')]
+      !unsupported && jsx(Button, { type: 'submit', form: 'flota-ship-form', disabled: adding || !shipCode.trim() || nameBad, children: adding ? 'Adding…' : 'Add ship' }, 'a')]
   return [
     jsxs(DialogHeader, { children: [jsx(DialogTitle, { children: ok ? 'Ship added' : 'Invite a ship' }), jsx(DialogDescription, { children: 'Pair another Hermes with Flota in two codes.' })] }, 'h'),
     jsx('div', { className: 'flota-dialog-body', children: body }, 'b'),
@@ -2118,12 +2170,13 @@ export function JoinWizard({ api, hub, onDone, onCancel, onJoined, initial = {},
   }
   useEffect(() => { if (step === 1 && initial.check === undefined) runCheck() }, [])
   const peek = decodeInvite(code)
-  const flagship = (result && result.flagship) || (peek && peek.flagship) || null
+  const flagship = (result && result.flagship) || (peek && peek.flagship) || (error && error.needs === 'confirm' && error.flagship) || null
   const join = async () => {
     setJoining(true)
     setError(null)
     try {
-      const r = await api.join(code.trim())
+      // Pressing Join fleet under 'Join X's fleet?' is the confirmation the backend asks for.
+      const r = await api.join(code.trim(), flagship || (error && error.needs === 'confirm' && error.flagship) || undefined)
       setResult(r || {})
       if (onJoined) onJoined()
     } catch (err) {
@@ -2267,9 +2320,11 @@ export function UpdateError({ error, scope, onFix }) {
 
 /** Shown instead of an error when this connection has no Flota: find the flagship on another
  *  connection and open it there, and say what this machine can do as a ship. */
-export function ReachCard({ error, scope, probe, onReach, onRetry, remember = true, setRemember = () => {}, reaching = false }) {
+export function ReachCard({ error, scope, probe, onReach, onRetry, remember = false, setRemember = () => {}, reaching = false }) {
   const kind = errKind(error || {}, error && error.raw)
   const found = probe && probe.found
+  const others = ((probe && probe.all) || []).filter(h => h !== found && !h.sameConnection)
+  const many = !!found && !found.sameConnection && others.length > 0
   const off = kind === 'plugin-off' || kind === 'route-missing'
   let head
   let lead
@@ -2281,8 +2336,9 @@ export function ReachCard({ error, scope, probe, onReach, onRetry, remember = tr
   } else if (found) {
     head = scope.local ? 'This PC’s Hermes is a ship' : `Flota is not enabled on ${scope.label}`
     const ships = found.machines.length ? ` It leads ${plural(found.machines.length, 'ship')}: ${found.machines.slice(0, 5).join(', ')}${found.machines.length > 5 ? '…' : ''}.` : ''
-    lead = `Your fleet is managed by the flagship on ${found.label}.${ships} Open it there to see the map, wake machines and add ships.`
-    actions = [jsx(Button, { size: 'sm', onClick: () => onReach(found), disabled: reaching, children: reaching ? 'Opening…' : `Open the fleet on ${found.label}` }, 'go')]
+    lead = many ? `${others.length + 1} of this app’s connections run Flota. Choose the fleet to open: the map, waking machines and adding ships happen there.`
+      : `Your fleet is managed by the flagship on ${found.label}.${ships} Open it there to see the map, wake machines and add ships.`
+    actions = many ? [] : [jsx(Button, { size: 'sm', onClick: () => onReach(found), disabled: reaching, children: reaching ? 'Opening…' : `Open the fleet on ${found.label}` }, 'go')]
   } else {
     head = off ? 'Flota is not enabled on this Hermes' : 'Flota backend not reachable'
     lead = off ? BACKEND_OFF : errorText(error, 'reach Flota')
@@ -2294,11 +2350,15 @@ export function ReachCard({ error, scope, probe, onReach, onRetry, remember = tr
       jsxs('div', { children: [jsx('div', { className: 'flota-side-name', children: head }, 'h'), jsx('div', { className: 'flota-reach-lead', children: lead }, 'l')] }, 't')
     ] }, 'head'),
     looking && jsx(Progress, { steps: ['Looking for your flagship on this app’s other connections…'] }, 'p'),
+    many && jsx('ul', { className: 'flota-reach-list', children: [found, ...others].map(h => jsxs('li', { 'data-flagship-route': `${h.route.connectionId}::${h.route.profile}`, children: [
+      jsxs('div', { children: [jsx('b', { children: h.label }, 'n'), jsx('div', { className: 'flota-muted', children: h.machines.length ? `${plural(h.machines.length, 'ship')}: ${h.machines.slice(0, 5).join(', ')}${h.machines.length > 5 ? '…' : ''}` : 'no ships yet' }, 's')] }, 't'),
+      jsx(Button, { size: 'sm', variant: h === found ? undefined : 'secondary', onClick: () => onReach(h), disabled: reaching, children: reaching ? 'Opening…' : `Open the fleet on ${h.label}` }, 'go')
+    ] }, `${h.route.connectionId}::${h.route.profile}`)) }, 'list'),
     found && jsxs('div', { className: 'flota-reach-found', children: [
-      jsxs('span', { className: 'flota-scope-chip', 'data-flagship-route': `${found.route.connectionId}::${found.route.profile}`, children: [jsx('i', {}, 'i'), `Flagship on ${found.label}`] }, 'c'),
+      !many && jsxs('span', { className: 'flota-scope-chip', 'data-flagship-route': `${found.route.connectionId}::${found.route.profile}`, children: [jsx('i', {}, 'i'), `Flagship on ${found.label}`] }, 'c'),
       !found.sameConnection && jsxs('label', { className: 'flota-checkline', children: [
         jsx('input', { type: 'checkbox', checked: !!remember, onChange: e => setRemember(!!(e && e.target ? e.target.checked : e)) }, 'x'),
-        'Open the flagship automatically next time'
+        many ? 'Open the one I choose automatically next time' : 'Open the flagship automatically next time'
       ] }, 'r')
     ] }, 'found'),
     probe && !found && jsx('div', { className: 'flota-muted', children: probe.supported === false
@@ -2322,7 +2382,9 @@ export function ReachCard({ error, scope, probe, onReach, onRetry, remember = tr
 /** A small header menu (a native <details>, so it needs no state). */
 export function Menu({ label, items, id }) {
   const close = e => { const d = e && e.currentTarget && e.currentTarget.closest && e.currentTarget.closest('details'); if (d) d.removeAttribute('open') }
-  return jsxs('details', { className: 'flota-menu', 'data-menu': id, children: [
+  return jsxs('details', { className: 'flota-menu', 'data-menu': id,
+    onKeyDown: e => { if (e.key === 'Escape') { e.currentTarget.removeAttribute('open'); const s = e.currentTarget.querySelector && e.currentTarget.querySelector('summary'); if (s) s.focus() } },
+    onBlur: e => { if (e.relatedTarget && !e.currentTarget.contains(e.relatedTarget)) e.currentTarget.removeAttribute('open') }, children: [
     jsx('summary', { className: 'flota-menu-btn', children: label }, 's'),
     jsx('div', { className: 'flota-menu-list', role: 'menu', children: items.filter(Boolean).map((it, i) => it.sep
       ? jsx('hr', {}, `sep${i}`)
@@ -2366,8 +2428,9 @@ export async function runRoleAction(kind, api, { fleet = null, machines = [] } =
       return 'flagship'
     }
     if (kind === 'ship-clear') {
-      for (const m of machines || []) await api.remove(m.name)
-      await api.setRole('ship')
+      // The backend clears its ships and switches role in one step; only one without /role needs the loop.
+      const r = await api.setRole('ship', true)
+      if (r && r.unsupported) for (const m of machines || []) await api.remove(m.name)
       return 'ship'
     }
     if ((machines || []).length) throw Object.assign(new Error(roleRefusal({ needs: 'remove_ships' })), { needs: 'remove_ships' })
@@ -2442,8 +2505,27 @@ function Summary({ machines }) {
   ] })
 }
 
-const readStored = () => { try { return (typeof localStorage !== 'undefined' && localStorage.getItem(ROLE_STORE)) || null } catch { return null } }
-const writeStored = role => { try { if (typeof localStorage !== 'undefined') localStorage.setItem(ROLE_STORE, role) } catch { /* private mode */ } }
+/** The role picked in the page is kept per connection and profile (a choice made on this PC says
+ *  nothing about another Hermes). The old single key is still read for this PC's default profile. */
+export const roleKey = scope => `${ROLE_STORE}::${(scope && scope.connectionId) || 'local'}::${(scope && scope.profile) || 'default'}`
+export const readStored = scope => {
+  try {
+    if (typeof localStorage === 'undefined') return null
+    const own = localStorage.getItem(roleKey(scope))
+    if (own != null) return own || null
+    return (!scope || (scope.local && scope.profile === 'default')) ? localStorage.getItem(ROLE_STORE) || null : null
+  } catch { return null }
+}
+export const writeStored = (role, scope) => { try { if (typeof localStorage !== 'undefined') localStorage.setItem(roleKey(scope), role) } catch { /* private mode */ } }
+
+/** The status error to show: react-query drops `error` each time it refetches with no data, which
+ *  made the offline card blink back to 'Checking your machines…' on every poll. Keep the last one
+ *  in `ref` until data arrives. */
+export function stickyError(ref, query) {
+  if (query.error) ref.current = query.error
+  else if (query.data) ref.current = null
+  return query.error || (query.data ? null : ref.current)
+}
 
 const SUBTITLE = {
   flagship: 'Your fleet: machines woken on demand and put back to sleep',
@@ -2464,7 +2546,9 @@ export async function openChat(bot, access, m, sdk = host) {
 }
 
 export function FlotaPage({ api, sdk = host }) {
-  const query = useQuery({ queryKey: KEY, queryFn: api.status, refetchInterval: POLL_MS, refetchIntervalInBackground: false, retry: 1 })
+  // With no data yet (offline) ask every 30 s, not every 5.
+  const query = useQuery({ queryKey: KEY, queryFn: api.status, refetchInterval: q => (q && q.state && q.state.data === undefined ? OFFLINE_POLL_MS : POLL_MS), refetchIntervalInBackground: false, retry: 1 })
+  const lastErr = useRef(null)
   const sched = useQuery({ queryKey: SCHEDULE_KEY, queryFn: api.schedule, refetchInterval: SCHEDULE_POLL_MS, refetchIntervalInBackground: false, retry: 0 })
   const fleetsQ = useQuery({ queryKey: FLEETS_KEY, queryFn: api.fleets, refetchInterval: SCHEDULE_POLL_MS, refetchIntervalInBackground: false, retry: 0 })
   const [selected, setSelected] = useState(null)
@@ -2472,7 +2556,10 @@ export function FlotaPage({ api, sdk = host }) {
   const [picked, setPicked] = useState(null)
   const [pinJoin, setPinJoin] = useState(false)
   const [roleAct, setRoleAct] = useState(null) // null | 'leave' | 'flagship' | 'ship' | 'ship-clear'
-  const [remember, setRemember] = useState(true)
+  const [remember, setRememberState] = useState(() => !!readReach()) // off until the user opts in
+  const [, bump] = useState(0)
+  const setRemember = on => { setRememberState(!!on); if (!on) clearReach() }
+  const stopAuto = () => { clearReach(); setRememberState(false); bump(x => x + 1) }
   const [reaching, setReaching] = useState(false)
   const autoTried = useRef(false)
   const netQ = useQuery({ queryKey: NET_KEY, queryFn: () => loadNet(sdk), refetchInterval: NET_POLL_MS, refetchIntervalInBackground: false, retry: 0 })
@@ -2481,12 +2568,13 @@ export function FlotaPage({ api, sdk = host }) {
   const status = query.data
   const machines = (status && status.machines) || []
   const current = machines.find(m => m.name === selected)
-  const err = query.error ? classifyError(query.error) : null
+  const rawErr = stickyError(lastErr, query)
+  const err = rawErr ? classifyError(rawErr) : null
   const fleetsData = fleetsQ.data
   const fleetsUnsupported = !!(fleetsData && fleetsData.unsupported)
   const fleets = fleetsData ? (Array.isArray(fleetsData.fleets) ? fleetsData.fleets : []) : fleetsQ.error ? [] : null
   const fleet = status ? fleetOf(status, fleets) : null
-  const role = effectiveRole(status, picked, readStored())
+  const role = effectiveRole(status, picked, readStored(scope))
   const mode = err && !status ? 'offline' : viewMode({ status, fleets, role, pinJoin })
   // No Flota on this connection: look for the flagship on the app's other connections.
   const lost = mode === 'offline' && err.kind !== 'auth'
@@ -2505,10 +2593,11 @@ export function FlotaPage({ api, sdk = host }) {
   const reach = async (found, { auto = false } = {}) => {
     setReaching(true)
     try {
-      if (!auto && remember && !found.sameConnection) writeReach(found.route)
+      if (!auto && !found.sameConnection) { writeLast(found.route); if (remember) writeReach(found.route); else clearReach() }
       await reachRoute(found.route, sdk)
-      notify({ kind: 'info', message: `Flota: opened the flagship on ${found.label}` })
+      notify({ kind: 'info', message: auto ? `Flota: opened the flagship on ${found.label} automatically (turn this off in the Flota header)` : `Flota: opened the flagship on ${found.label}` })
     } catch (e) {
+      if (auto) stopAuto() // a route that no longer opens is not tried again on every visit
       notify({ kind: 'error', message: e.message })
     } finally {
       setReaching(false)
@@ -2517,21 +2606,28 @@ export function FlotaPage({ api, sdk = host }) {
   }
   useEffect(() => {
     const found = probe && probe.found
-    if (!lost || !found || found.sameConnection || autoTried.current) return
-    if (sameRoute(found.route, readReach())) { autoTried.current = true; reach(found, { auto: true }) }
+    if (!lost || !found || autoTried.current) return
+    const want = readReach()
+    const hit = want && ((probe.all || [found]).find(h => !h.sameConnection && sameRoute(h.route, want)))
+    if (hit) { autoTried.current = true; reach(hit, { auto: true }) }
   }, [lost, probe && probe.found && `${probe.found.route.connectionId}::${probe.found.route.profile}`])
 
   const choose = async next => {
     setPicked(next)
-    writeStored(next)
+    writeStored(next, scope)
     setSelected(null)
-    try { await api.setRole(next) } catch { /* kept locally */ }
+    try { await api.setRole(next) } catch (e) {
+      // Not saved on the backend: say so and do not pretend (an older backend answers calmly, not here).
+      setPicked(null)
+      writeStored('', scope)
+      notify({ kind: 'error', message: `Flota could not save this choice: ${errorText(classifyError(e), 'set the role', scope)}` })
+    }
     queryClient.invalidateQueries({ queryKey: KEY })
   }
   const doRole = async kind => {
     const after = await runRoleAction(kind, api, { fleet, machines })
     setPicked(after || null)
-    writeStored(after || '')
+    writeStored(after || '', scope)
     setSelected(null)
     setPinJoin(false)
     notify({ kind: 'success', message: kind === 'leave' ? `Left ${fleet && fleet.flagship}’s fleet` : after === 'flagship' ? 'This machine is a flagship now' : 'This machine is ready to join a fleet' })
@@ -2605,6 +2701,8 @@ export function FlotaPage({ api, sdk = host }) {
   const confirm = roleAct && roleActionText(roleAct, { fleet, machines })
   const scopeChip = status && !scope.local && jsxs('span', { className: 'flota-scope-chip', title: `Flota reaches this Hermes through the ${scope.label} connection (profile ${scope.profile})`,
     children: [jsx('i', {}, 'i'), `${mode === 'ship' ? 'Ship' : 'Flagship'}: ${hubName} (via ${scope.label} connection)`] }, 'scope')
+  const autoChip = status && sameRoute(readReach(), scope) && jsx('button', { type: 'button', className: 'flota-linkbtn', 'data-action': 'stop-auto', onClick: stopAuto,
+    title: 'Flota switches the app to this connection when you open it elsewhere. Click to stop that.', children: 'Opens automatically · turn off' }, 'auto')
 
   return jsxs('div', { className: `flota-page mode-${mode}`, 'data-mode': mode, children: [
     mode !== 'choose' && jsxs('div', { className: 'flota-head', children: [
@@ -2615,7 +2713,7 @@ export function FlotaPage({ api, sdk = host }) {
       mode === 'flagship' && machines.length > 0 && jsx(Summary, { machines }),
       mode === 'ship' && jsx('div', { className: 'flota-summary', children: jsxs('span', { className: 'flota-pill up', children: [jsx('i', {}), fname ? `ship of ${fname}` : `ship in ${plural((fleets || []).length, 'fleet')}`] }) }),
       jsxs('div', { className: 'flota-head-right', children: [
-        scopeChip,
+        scopeChip, autoChip,
         err && status ? jsx(UpdateError, { error: err, scope, onFix: () => reach({ route: { connectionId: scope.connectionId, profile: 'default' }, label: scope.label, sameConnection: true }) }) : mode !== 'offline' && jsx(Ago, { at: query.dataUpdatedAt }),
         ...actions
       ] })
@@ -2667,14 +2765,22 @@ export function makeApi(rest) {
         return { jobs: (res && res.jobs) || [], available: true, error: null, via: 'cron.manage' }
       }
     },
-    wake: n => rest(`/wake/${name(n)}`, { method: 'POST' }),
-    sleep: (n, force) => rest(`/sleep/${name(n)}${force ? '?force=1' : ''}`, { method: 'POST', timeoutMs: 60000 }),
-    off: (n, force) => rest(`/off/${name(n)}${force ? '?force=1' : ''}`, { method: 'POST', timeoutMs: 60000 }),
+    // Every POST carries a JSON body: the backend refuses a POST that is not application/json.
+    wake: n => rest(`/wake/${name(n)}`, { method: 'POST', body: {} }),
+    sleep: (n, force) => rest(`/sleep/${name(n)}${force ? '?force=1' : ''}`, { method: 'POST', body: force ? { force: true } : {}, timeoutMs: 60000 }),
+    off: (n, force) => rest(`/off/${name(n)}${force ? '?force=1' : ''}`, { method: 'POST', body: force ? { force: true } : {}, timeoutMs: 60000 }),
     save: body => rest('/machines', { method: 'POST', body, timeoutMs: 120000 }),
     remove: n => rest(`/machines/${name(n)}`, { method: 'DELETE' }),
-    invite: () => rest('/invite'),
-    addShip: code => rest('/ships', { method: 'POST', body: { ship_code: code }, timeoutMs: 120000 }),
-    join: code => rest('/join', { method: 'POST', body: { code }, timeoutMs: 60000 }),
+    // Minting an invite is a POST; a backend from before that answers 405 and still mints on GET.
+    invite: async () => {
+      try { return await rest('/invite', { method: 'POST', body: {} }) } catch (err) {
+        if (parseError(err).status !== 405) throw err
+        return rest('/invite')
+      }
+    },
+    addShip: (code, shipName, replace) => rest('/ships', { method: 'POST', body: { ship_code: code, ...(shipName ? { name: shipName } : {}), ...(replace ? { replace: true } : {}) }, timeoutMs: 120000 }),
+    // `confirm` is the flagship name the user saw and accepted; without it the backend trusts nothing.
+    join: (code, confirm) => rest('/join', { method: 'POST', body: confirm ? { code, confirm } : { code }, timeoutMs: 60000 }),
     joinCheck: orMissing(() => rest('/join/check', { timeoutMs: 30000 }), { unsupported: true }),
     fleets: orMissing(() => rest('/fleets'), { fleets: [], unsupported: true }),
     leave: f => rest(`/fleets/${name(f)}`, { method: 'DELETE' }),

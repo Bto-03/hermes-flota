@@ -90,7 +90,7 @@
     }
     const parts = path.split("?")[0].split("/");
     const name = decodeURIComponent(parts[2] || "");
-    const force = path.indexOf("force=1") >= 0;
+    const force = path.indexOf("force=1") >= 0 || /"force":\s*true/.test((options && options.body) || "");
     if (path === "/machines" && method === "POST") {
       const body = JSON.parse(options.body || "{}");
       const existing = demoFind(body.name);
@@ -131,7 +131,8 @@
     return api(path, {
       method: method || "POST",
       headers: { "Content-Type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      // Always a JSON body on POST: the API refuses a POST that is not application/json.
+      body: body === undefined ? (method && method !== "POST" ? undefined : "{}") : JSON.stringify(body),
     });
   }
 
@@ -629,7 +630,10 @@
     const alive = useRef(true);
     const known = useRef(null);  // machine names seen on the previous poll
 
+    const loading = useRef(false);  // one /status at a time: a slow server must not stack requests
     const refresh = useCallback(function () {
+      if (loading.current) return Promise.resolve();
+      loading.current = true;
       return api("/status").then(function (res) {
         if (!alive.current) return;
         const names = (res.machines || []).map(function (m) { return m.name; });
@@ -655,15 +659,21 @@
         setData(res); setLoadError(null); setUpdated(Date.now());
       }).catch(function (err) {
         if (alive.current) setLoadError(explain(err).message);
-      });
+      }).finally(function () { loading.current = false; });
     }, []);
 
     useEffect(function () {
       alive.current = true;
       refresh();
-      const timer = setInterval(refresh, POLL_MS);
+      // A hidden tab does not poll (it would keep an idle gateway awake); it catches up when shown.
+      const tick = function () { if (!document.hidden) refresh(); };
+      const timer = setInterval(tick, POLL_MS);
       const clock = setInterval(function () { setNow(Date.now()); }, 1000);
-      return function () { alive.current = false; clearInterval(timer); clearInterval(clock); };
+      document.addEventListener("visibilitychange", tick);
+      return function () {
+        alive.current = false; clearInterval(timer); clearInterval(clock);
+        document.removeEventListener("visibilitychange", tick);
+      };
     }, [refresh]);
 
     function select(name) {
@@ -686,7 +696,7 @@
           const what = action === "off" ? "Busy — power off anyway?" : "Busy — sleep anyway?";
           if ((action === "sleep" || action === "off") && httpStatus(err) === 409 &&
               window.confirm(what + "\n\n" + explain(err).message)) {
-            return post(path + "?force=1");
+            return post(path + "?force=1", { force: true });
           }
           throw err;
         });
@@ -743,6 +753,11 @@
         return h(MachineCard, { key: m.name, m: m, allowOff: data.allow_power_off, pending: pending[m.name],
           selected: selected === m.name, onHover: setHovered, onAction: onAction });
       })),
+      h("p", { className: "flota-muted flota-footnote" },
+        "This tab is the quick view: status, wake, sleep and add by address. The full fleet view (crews, schedule, " +
+        "pairing, flagship and ship roles) lives in the Flota page of Hermes Desktop: ",
+        h("a", { href: "https://github.com/Bto-03/hermes-flota/blob/main/docs/desktop-page.md", target: "_blank",
+          rel: "noreferrer noopener" }, "about the Flota page"), "."),
       h("p", { className: "flota-muted flota-footnote" },
         "Status refreshes every 5 s (SSH port probe). ",
         data && !data.busy_known ? "No running gateway has reported its subagents, so Sleep cannot tell " +

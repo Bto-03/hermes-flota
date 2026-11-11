@@ -25,7 +25,7 @@ If you never chose a role, Flota infers one: a Hermes with machines is a flagshi
 | Join a fleet | on the ship: `hermes flota join INVITE` (or paste the invite in the Flota page) | Adds the flagship's public key to the ship's `authorized_keys`, records the fleet, sets `role: ship` if no role was chosen, and prints the ship code. |
 | Rejoin the same fleet | `hermes flota join <new invite>` from the same flagship | Allowed. The key is already there, so nothing is duplicated; you get a fresh ship code. |
 | Join another fleet | — | Refused with `already in a fleet: <flagship>` (exit 1). Leave first. |
-| Leave | on the ship: `hermes flota leave [flagship]` | Removes the lines Flota added for that flagship (comment `flota-flagship:<name>`) and nothing else, forgets the fleet and clears the role. |
+| Leave | on the ship: `hermes flota leave [flagship]` | Removes the lines Flota added for that flagship (comment `flota-flagship:<name>`) and nothing else, forgets the fleet and clears the role. With no fleet on record (the plugin was reinstalled), it still removes stray `flota-flagship:` lines; bare `hermes flota` warns about them. |
 | Ship → flagship | `hermes flota role flagship` | Refused while the machine is in a fleet. With `--force`, it leaves the fleet first (key removed). |
 | Flagship → ship | `hermes flota role ship` | Refused while it leads ships. With `--force`, it removes every machine from the panel (and from the old `delegation.backends.flota` block). Their `flota-*` profiles are kept. |
 | Clear | `hermes flota role none` | Forgets the chosen role. Ships and fleets are untouched. |
@@ -36,14 +36,15 @@ If you never chose a role, Flota infers one: a Hermes with machines is a flagshi
 flagship                                   ship
 ────────                                   ────
 hermes flota invite      ──invite code──▶  hermes flota join <invite>
-                                           (confirm: "Let <flagship> log in as <you>?")
+                                           (confirm: "Let <flagship> (<user>) log in to this machine
+                                            as <you> with key SHA256:...? [y/N]")
 hermes flota add-ship    ◀──ship code───   prints the ship code
 <ship code>
 ```
 
-1. **Invite (flagship).** `hermes flota invite` prints an invite valid for **30 minutes** and records its nonce in `<hermes home>/flota/invites.json`.
-2. **Join (ship).** `hermes flota join INVITE` shows the flagship's name, its login user and the key's SHA256 fingerprint, then asks `[y/N]`. Without a terminal it refuses unless you pass `--yes`. Once you confirm, it appends the key to `~/.ssh/authorized_keys` (creating `~/.ssh` with mode 700 and setting the file to 600), runs the reachability checks below, and prints the ship code.
-3. **Add the ship (flagship).** `hermes flota add-ship <ship code>` checks that the code answers an unexpired invite issued by this Hermes. It then tries each address in the code: first a TCP connection to the port, then `ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new ... true`. It uses the first address that logs in and runs `setup` on it. Wake becomes `wol` if the flagship is on the ship's LAN (same broadcast domain), otherwise `none`. A ship already in the fleet (same MAC, or one of its addresses) is updated instead of duplicated; `--name` sets the name for a new one.
+1. **Invite (flagship).** `hermes flota invite` prints an invite valid for **30 minutes**, single use, and records its nonce in `<hermes home>/flota/invites.json`. It also prints the paste-ready line for the other machine: `hermes flota join <invite> --yes` (check the key fingerprint it prints there).
+2. **Join (ship).** `hermes flota join INVITE` shows the flagship's name, its login user and the key's SHA256 fingerprint, then asks `[y/N]`. Without a terminal it refuses unless you pass `--yes`. Once you confirm, it adds the key to this account's SSH login keys (`authorized_keys`, mode 600, in an SSH folder with mode 700), runs the reachability checks below, and prints the paste-ready line for the flagship: `hermes flota add-ship SHIPCODE`.
+3. **Add the ship (flagship).** `hermes flota add-ship SHIPCODE` checks that the code answers an unexpired invite issued by this Hermes. It then tries each address in the code: first a TCP connection to the port, then `ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new ... true`. It uses the first address that logs in and runs `setup` on it. Wake becomes `wol` if the flagship is on the ship's LAN (same broadcast domain), otherwise `none`. A ship already in the fleet (same MAC, or one of its addresses) is updated instead of duplicated, but only when it logs in on an address and user that machine already has. The MAC and addresses in a code are self-reported, so a code that would re-point an existing machine somewhere new is refused (`Nothing was changed.`, exit 2) unless you pass `--replace` (on the page: **This machine really moved - replace it**). `--name` sets the name for a new one.
 
 **Invites are single-use.** The nonce is spent when the ship is saved, so a second ship code for the same invite is refused. If adding fails (no address logs in), the nonce stays valid, and you can fix the problem on the ship and add the same code again until the invite expires.
 

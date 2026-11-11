@@ -59,11 +59,15 @@ def decode(prefix: str, code) -> dict:
     code = "".join(code.split())  # pasted codes may wrap
     if len(code) > MAX_CODE:
         raise PairingError(f"the code is longer than {MAX_CODE} characters")
-    if not code.startswith(prefix):
-        other = SHIP_PREFIX if prefix == INVITE_PREFIX else INVITE_PREFIX
-        hint = (" (that is a ship code: paste it on the flagship)" if prefix == INVITE_PREFIX
-                else " (that is an invite: paste it on the machine that joins)") if code.startswith(other) else ""
-        raise PairingError(f"not a Flota code: it must start with {prefix}{hint}")
+    head = code[:len(SHIP_PREFIX if code[:len(SHIP_PREFIX)].upper() == SHIP_PREFIX else INVITE_PREFIX)].upper()
+    if head != prefix:  # the prefix is matched in any case; the body is base64 and keeps its own
+        if head == SHIP_PREFIX:
+            raise PairingError("that is a ship code, not an invite: paste it on the flagship "
+                               "(hermes flota add-ship <ship code>)")
+        if head == INVITE_PREFIX:
+            raise PairingError("that is an invite, not a ship code: paste it on the machine that joins "
+                               "(hermes flota join <invite>)")
+        raise PairingError(f"not a Flota code: it must start with {prefix}")
     body = code[len(prefix):]
     try:
         data = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
@@ -78,7 +82,7 @@ def _text(data: dict, key: str, pattern: re.Pattern, what: str, required: bool =
     value = data.get(key)
     if value in (None, "") and not required:
         return ""
-    if not isinstance(value, str) or value.startswith("-") or not pattern.match(value):
+    if not isinstance(value, str) or value.startswith("-") or not pattern.fullmatch(value):
         raise PairingError(f"invalid {what} in the code")
     return value
 
@@ -148,7 +152,8 @@ def make_invite(*, flagship: str, user: str, pubkey: str, store: Path, now=time.
     t = now()
     nonce = secrets.token_hex(16)
     exp = int(t + INVITE_TTL)
-    invites = {n: e for n, e in _load_invites(store).items() if isinstance(e, (int, float)) and e > t}
+    # A spent nonce is kept as -expiry until then, so a reused ship code can be told from an unknown one.
+    invites = {n: e for n, e in _load_invites(store).items() if isinstance(e, (int, float)) and abs(e) > t}
     invites[nonce] = exp
     _save_invites(store, invites)
     code = encode(INVITE_PREFIX, {"v": 1, "flagship": flagship, "user": user, "pubkey": pubkey,
@@ -162,7 +167,7 @@ def read_invite(code, now=time.time) -> dict:
     if isinstance(exp, bool) or not isinstance(exp, (int, float)):
         raise PairingError("invalid expiry in the code")
     if exp <= now():
-        raise PairingError("this invite has expired; ask the flagship for a new one")
+        raise PairingError("this invite has expired; make a new one on the flagship: hermes flota invite")
     return {"flagship": _text(data, "flagship", _FLAGSHIP, "flagship name"),
             "user": str(data.get("user") or "")[:64], "pubkey": check_pubkey(data.get("pubkey")),
             "nonce": _text(data, "nonce", _NONCE, "nonce"), "exp": exp}
@@ -173,11 +178,15 @@ def read_ship(code, store: Path, now=time.time) -> dict:
     data = decode(SHIP_PREFIX, code)
     nonce = _text(data, "nonce", _NONCE, "nonce")
     exp = _load_invites(store).get(nonce)
-    if not isinstance(exp, (int, float)):
-        raise PairingError("this ship code answers an invite this Hermes did not issue, or one already "
-                           "used; make a new invite")
+    if not isinstance(exp, (int, float)) or isinstance(exp, bool):
+        raise PairingError("this ship code answers an invite this Hermes did not issue (or one that expired "
+                           "a while ago); make a new invite: hermes flota invite")
+    if exp < 0:
+        raise PairingError("this ship code was already used: its ship is in the fleet (hermes flota status). "
+                           "To add another machine make a new invite: hermes flota invite")
     if exp <= now():
-        raise PairingError("the invite this ship code answers has expired; make a new invite")
+        raise PairingError("the invite this ship code answers has expired; make a new invite "
+                           "(hermes flota invite) and join again on the ship")
     hosts = [_text(data, "host", _HOST, "host")]
     alt = data.get("alt_hosts") or []
     if not isinstance(alt, list) or len(alt) > 8:
@@ -206,7 +215,9 @@ def read_ship(code, store: Path, now=time.time) -> dict:
 
 def spend(nonce: str, store: Path) -> None:
     invites = _load_invites(store)
-    if invites.pop(nonce, None) is not None:
+    exp = invites.get(nonce)
+    if isinstance(exp, (int, float)) and exp > 0:
+        invites[nonce] = -exp
         _save_invites(store, invites)
 
 
@@ -256,6 +267,17 @@ def deauthorize(flagship: str, home: Path | None = None) -> int:
         path.write_text("".join(keep))
         os.chmod(path, 0o600)
     return len(lines) - len(keep)
+
+
+def flagships(home: Path | None = None) -> list[str]:
+    """Names of the flagships whose key Flota added to ``authorized_keys`` (read from the comments)."""
+    path = Path(home or Path.home()) / ".ssh" / "authorized_keys"
+    try:
+        words = [line.split() for line in path.read_text().splitlines()]
+    except OSError:
+        return []
+    names = [w[-1][len(COMMENT):] for w in words if len(w) >= 3 and w[-1].startswith(COMMENT)]
+    return sorted({n for n in names if _FLAGSHIP.fullmatch(n)})
 
 
 # --- ship: what it knows about itself -------------------------------------------------------------------
@@ -396,7 +418,7 @@ def classify_ssh(stderr: str, host: str) -> tuple[str, str]:
                 "then add it again; otherwise stop: something else answers on that address")
     if "Permission denied" in text:
         return ("the ship refused the flagship's key (not in its authorized_keys, or wrong user)",
-                "on the ship, run Join again with a fresh invite (hermes flota join <invite>)")
+                "on the ship, run Join again (hermes flota join <invite>) as the user in the ship code")
     if "Connection refused" in text:
         return "nothing listens on port 22", "on the ship, start the SSH server (Join shows the command)"
     if "timed out" in text.lower():

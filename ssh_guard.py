@@ -7,7 +7,8 @@ Flota machine is one of your own computers: its ``~/.hermes`` is a real Hermes i
 caches, often many GB), so the push writes this host's files into it and the pull times out after
 holding the parent busy for minutes. No ``terminal.*`` key turns it off, but the constructor
 takes ``sync_files``; this passes ``sync_files=False`` for SSH terminals opened as a
-``flota-<machine>`` profile (that is how core runs a Flota subagent). Other profiles are untouched.
+Flota machine's profile (that is how core runs a Flota subagent): ``flota-<machine>``, or whatever
+name the machine's ``profile`` key carries. Other profiles are untouched.
 """
 from __future__ import annotations
 
@@ -27,8 +28,27 @@ def _hermes_home() -> Path:
     return get_hermes_home()
 
 
+def _machine_profiles() -> set[str]:
+    """Profile names of the configured machines; empty when the config cannot be read."""
+    try:
+        from hermes_cli.config import load_config_readonly
+        from .machines import load_machines
+        from .settings import effective, plugin_settings_from_config
+        config = load_config_readonly() or {}
+        machines, _ = load_machines(effective(config.get("delegation"), plugin_settings_from_config(config)))
+        return {machine.profile for machine in machines.values()}
+    except Exception:
+        return set()
+
+
 def is_flota_profile(home: Path) -> bool:
-    return home.parent.name == "profiles" and home.name.startswith(PROFILE_PREFIX)
+    """A profile Flota runs subagents as: named ``flota-*``, marked at setup (``flota/owner``), or
+    the ``profile`` of a configured machine (a hand-edited name, read from the profile's own config,
+    which setup cloned from the fleet's)."""
+    if home.parent.name != "profiles":
+        return False
+    return (home.name.startswith(PROFILE_PREFIX) or (home / "flota" / "owner").is_file()
+            or home.name in _machine_profiles())
 
 
 def _core_class():

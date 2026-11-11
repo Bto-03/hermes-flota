@@ -24,6 +24,9 @@ class Sleeper:
     def mark_down(self, machine):
         self.marked.append(machine.name)
 
+    def watch(self, machine):
+        self.watched = getattr(self, "watched", []) + [machine.name]
+
 
 def run(args, settings=SETTINGS, sleeper=None, probe=None, ensure=None):
     calls = []
@@ -41,7 +44,7 @@ def test_schema():
     assert tool.SCHEMA["name"] == "flota"
     props = tool.SCHEMA["parameters"]["properties"]
     assert props["action"]["enum"] == ["status", "wake", "sleep", "off"]
-    assert set(props) == {"action", "machine", "force"}
+    assert set(props) == {"action", "machine"}  # no force: only a human stops a busy machine
     assert tool.SCHEMA["parameters"]["required"] == ["action"]
 
 
@@ -83,12 +86,25 @@ def test_sleep_without_sleeper_uses_power_with_machine_sleep(monkeypatch):
     assert calls == [("pc", "hibernate")]
 
 
-def test_busy_machine_is_refused_unless_forced():
-    sleeper = Sleeper({"pc": 1})
-    out, calls = run({"action": "sleep", "machine": "pc"}, sleeper=sleeper)
-    assert "busy" in out["error"] and "force" in out["error"] and not calls and not sleeper.slept
-    out, calls = run({"action": "sleep", "machine": "pc", "force": True}, sleeper=sleeper)
-    assert calls == [("pc", "suspend")] and not sleeper.slept and sleeper.marked == ["pc"]
+def test_busy_machine_is_refused_even_with_force():
+    for action, name in (("sleep", "pc"), ("off", "tower")):
+        sleeper = Sleeper({name: 1})
+        for args in ({}, {"force": True}, {"force": "true"}):
+            out, calls = run({"action": action, "machine": name, **args}, sleeper=sleeper)
+            assert "busy" in out["error"] and f"hermes flota {action} {name} --force" in out["error"]
+            assert not calls and not sleeper.slept and not sleeper.marked
+
+
+def test_a_woken_machine_gets_its_idle_timer():
+    sleeper = Sleeper()
+    out, _ = run({"action": "wake", "machine": "pc"}, sleeper=sleeper)
+    assert out["up"] is True and sleeper.watched == ["pc"]
+
+    def boom(m):
+        raise WakeError("down")
+    sleeper = Sleeper()
+    run({"action": "wake", "machine": "pc"}, sleeper=sleeper, ensure=boom)
+    assert not hasattr(sleeper, "watched")
 
 
 def test_off_needs_a_wake_method_and_the_master_switch():
@@ -155,9 +171,9 @@ def test_available_follows_agent_tool():
     assert tool.available(load_config=lambda: off) is False
 
 
-def test_off_goes_through_the_sleeper_unless_forced():
+def test_off_always_goes_through_the_sleeper():
     sleeper = Sleeper()
-    out, calls = run({"action": "off", "machine": "tower"}, sleeper=sleeper)
-    assert sleeper.slept == [("tower", "poweroff")] and not calls
-    out, calls = run({"action": "off", "machine": "tower", "force": True}, sleeper=sleeper)
-    assert calls == [("tower", "poweroff")] and sleeper.marked == ["tower"]
+    for args in ({}, {"force": True}):  # the sleeper also refuses routes not started yet
+        out, calls = run({"action": "off", "machine": "tower", **args}, sleeper=sleeper)
+        assert not calls and not sleeper.marked
+    assert sleeper.slept == [("tower", "poweroff")] * 2

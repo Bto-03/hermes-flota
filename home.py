@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 PROFILE_PREFIX = "flota-"
 OWNER_FILE = Path("flota") / "owner"
+ADOPTED_FILE = Path("flota") / "adopted"  # the profile existed before setup: never Flota's to delete
 
 
 def active_home() -> Path:

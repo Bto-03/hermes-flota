@@ -8,7 +8,13 @@ The dashboard imports this file on its own (not as part of the plugin package), 
 looked up in ``sys.modules`` (Hermes may already have loaded it) or imported here from the parent
 directory. The dashboard is a different process from the gateway, so it reads the busy counts the
 gateway publishes (``idle.read_busy``); ``busy_known`` is false when no live gateway wrote them.
-Sleep / power off answer 409 for a busy machine unless called with ``?force=1``.
+Sleep / power off answer 409 for a busy machine unless called with ``{"force": true}`` (or ``?force=1``).
+
+Every POST must be ``Content-Type: application/json`` (415 otherwise): a cross-site page cannot send
+that without a preflight, so a "simple" form post cannot wake, sleep or power off a machine. No GET
+changes anything: ``POST /invite`` mints an invite, ``GET /invite`` only returns the last unexpired
+one. ``POST /join`` needs ``confirm`` (the invite's flagship name or key fingerprint) before it
+trusts a key. Crew rows from ships go through ``crew.clean_crew`` before they reach the page.
 
 ``GET /status`` is polled every few seconds and must always answer fast: TCP probes run in
 background threads (one in flight per machine, ``PROBE_TIMEOUT`` each) and the request waits at most
@@ -51,6 +57,9 @@ class _JSONErrors(APIRoute):
         handler = super().get_route_handler()
 
         async def run(request):
+            if request.method == "POST" and not _JSON_TYPE.match(request.headers.get("content-type") or ""):
+                return JSONResponse({"detail": "Flota needs Content-Type: application/json on POST requests "
+                                               "(update the Flota page: reload the app)"}, status_code=415)
             try:
                 return await handler(request)
             except (StarletteHTTPException, RequestValidationError):
@@ -63,6 +72,7 @@ class _JSONErrors(APIRoute):
         return run
 
 
+_JSON_TYPE = re.compile(r"\s*application/(?:[\w.+-]+\+)?json\s*(?:;|$)", re.I)
 router = APIRouter(route_class=_JSONErrors)
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -288,7 +298,7 @@ def _crew(machines_rows, settings: Mapping, terminals: Mapping, busy) -> tuple[l
     except Exception:
         profiles = []
     try:
-        hub = crew.hub_crew(profiles, ship_hands={m.profile for m, _ in machines_rows})
+        hub = crew.clean_crew(crew.hub_crew(profiles, ship_hands={m.profile for m, _ in machines_rows}))
     except Exception:
         hub = []
     by_id = dict(profiles)
@@ -309,6 +319,10 @@ def _crew(machines_rows, settings: Mapping, terminals: Mapping, busy) -> tuple[l
             per[machine.name] = remote.merge(per[machine.name], remote.crew_entries(machine, scan, up=is_on))
         except Exception:
             pass
+        try:
+            per[machine.name] = crew.clean_crew(per[machine.name])
+        except Exception:
+            per[machine.name] = []
         hostnames[machine.name] = (scan or {}).get("hostname")
     return hub, per, hostnames
 
@@ -468,6 +482,15 @@ def schedule():
 
 # --- act -----------------------------------------------------------------------------------------
 
+def _forced(force: bool, body) -> bool:
+    """``force`` from the query (older pages) or the JSON body ``{"force": true}``."""
+    if isinstance(body, Mapping) and "force" in body:
+        if not isinstance(body["force"], bool):
+            raise HTTPException(400, "force must be true or false")
+        return force or body["force"]
+    return force
+
+
 @router.post("/wake/{name}", status_code=202)
 def wake_machine(name: str):
     _, machine = _machine(name)
@@ -504,18 +527,18 @@ def _power(machine, action: str, force: bool) -> dict:
 
 
 @router.post("/sleep/{name}")
-def sleep_machine(name: str, force: bool = False):
+def sleep_machine(name: str, force: bool = False, body: Any = Body(None)):
     _, machine = _machine(name)
-    return _power(machine, _mod("power").default_action(machine), force)
+    return _power(machine, _mod("power").default_action(machine), _forced(force, body))
 
 
 @router.post("/off/{name}")
-def power_off(name: str, force: bool = False):
+def power_off(name: str, force: bool = False, body: Any = Body(None)):
     settings, machine = _machine(name)
     refusal = _mod("settings").power_off_refusal(machine, settings)
     if refusal:
         raise HTTPException(403, refusal)
-    return _power(machine, "poweroff", force)
+    return _power(machine, "poweroff", _forced(force, body))
 
 
 # --- edit ----------------------------------------------------------------------------------------
@@ -615,6 +638,11 @@ def save_machine(body: dict = Body(...)):
         params["user"] = params["user"] or ""
         result = _in_worker(lambda: _mod("cli").run_setup(SimpleNamespace(name=name, **params)), name)
         result["copied_legacy"] = sorted(copied)
+        try:  # what setup ended up with, so the page can say whether Flota can wake this ship
+            saved = _fleet()[1].get(name)
+            result.update(wake=saved.wake, mac=saved.mac)
+        except Exception:
+            pass
         return result
     profile = entry["profile"]
     exists = _profile_exists(profile)
@@ -709,20 +737,64 @@ def save_role(body: dict = Body(...)):
     return {"ok": True, **result}
 
 
-@router.get("/invite")
-def invite():
+_INVITES: dict[str, dict] = {}  # invites store path -> the last invite minted from this process
+_INVITES_LOCK = threading.Lock()
+
+
+def _invites_key() -> str:
     try:
-        return _mod("cli").run_invite()
+        return str(_mod("cli")._invites_store())
+    except Exception:
+        return ""
+
+
+def _live_invite() -> dict | None:
+    with _INVITES_LOCK:
+        entry = _INVITES.get(_invites_key())
+        if entry and entry["until"] > time.time():
+            return entry["invite"]
+    return None
+
+
+@router.post("/invite")
+def make_invite(body: Any = Body(None)):
+    """Mint a new invite (writes ``invites.json``, may create the Flota key)."""
+    try:
+        made = _mod("cli").run_invite()
     except _mod("pairing").PairingError as exc:
         raise HTTPException(500, str(exc)) from exc
     except (RuntimeError, OSError) as exc:
         raise HTTPException(500, f"could not make an invite: {exc}") from exc
+    with _INVITES_LOCK:
+        _INVITES[_invites_key()] = {"invite": made, "until": time.time() + _mod("pairing").INVITE_TTL - 5}
+    return made
+
+
+@router.get("/invite")
+def invite():
+    """Read-only: the last unexpired invite minted here, or ``{"code": null}``. Never mints."""
+    return _live_invite() or {"code": None, "expires_at": None, "flagship": None}
 
 
 @router.post("/join")
 def join(body: dict = Body(...)):
+    """``{code, confirm}``: ``confirm`` is the invite's flagship name or key fingerprint, as the
+    user saw it. Without a matching one nothing is trusted: 409 ``{needs: 'confirm', flagship,
+    pubkey_fingerprint}``."""
     code = _code(body, "code")
     cli = _mod("cli")
+    pairing = _mod("pairing")
+    try:
+        seen = pairing.read_invite(code)
+        fingerprint = pairing.fingerprint(seen["pubkey"])
+    except pairing.PairingError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    confirm = body.get("confirm")
+    if not isinstance(confirm, str) or confirm.strip() not in (seen["flagship"], fingerprint):
+        text = (f"Confirm joining the fleet of {seen['flagship']} (key {fingerprint}): this lets it log in "
+                "to this machine over SSH.")
+        return JSONResponse({"error": text, "detail": text, "needs": "confirm", "flagship": seen["flagship"],
+                             "pubkey_fingerprint": fingerprint}, status_code=409)
     try:
         return cli.run_join(code)
     except cli.AlreadyInFleet as exc:
@@ -769,9 +841,13 @@ def add_ship(body: dict = Body(...)):
                                  "profile flota-<name>)")
     else:
         override = override.strip()
+    replace = body.get("replace", False)  # the user confirmed "this machine really moved"
+    if not isinstance(replace, bool):
+        raise HTTPException(400, "replace must be true or false")
     pairing = _mod("pairing")
     try:
         name = override or pairing.decode(pairing.SHIP_PREFIX, code).get("name")
     except pairing.PairingError as exc:
         raise HTTPException(400, str(exc)) from exc
-    return _in_worker(lambda: _mod("cli").run_add_ship(code, name=override), str(name or "ship"))
+    extra = {"replace": True} if replace else {}
+    return _in_worker(lambda: _mod("cli").run_add_ship(code, name=override, **extra), str(name or "ship"))

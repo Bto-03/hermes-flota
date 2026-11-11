@@ -89,7 +89,7 @@ def test_no_valid_machines_means_no_parameter_no_guidance_and_the_parent_route(c
     provider = FlotaDelegationProvider(ensure=ensure)
     assert provider.task_parameters(config) == {}
     assert provider.description(config) == ""
-    assert provider.route_task(_task(), config) == {}
+    assert provider.route_task(_task(), config) == config
     assert ensure.calls == []
 
 
@@ -132,7 +132,10 @@ def test_chosen_machine_is_made_ready_then_routed_to_its_profile():
 def test_task_without_machine_runs_on_the_parent_route():
     ensure = Ensure()
     provider = FlotaDelegationProvider(ensure=ensure)
-    assert provider.route_task(_task(), _config(machines=MACHINES)) == {}
+    config = {**_config(machines=MACHINES), "model": "cheap-model", "provider": "p", "service_tier": "fast"}
+    route = provider.route_task(_task(), config)  # what the default backend answers
+    assert route["model"] == "cheap-model" and route["provider"] == "p" and "service_tier" not in route
+    assert "profile" not in route and "label" not in route
     assert ensure.calls == []
 
 
@@ -150,7 +153,8 @@ def test_task_without_machine_uses_the_configured_default():
 def test_default_that_is_not_a_loaded_machine_is_ignored(default):
     ensure = Ensure()
     provider = FlotaDelegationProvider(ensure=ensure)
-    assert provider.route_task(_task(), _config(machines=MACHINES, default=default)) == {}
+    route = provider.route_task(_task(), {**_config(machines=MACHINES, default=default), "model": "m"})
+    assert route["model"] == "m" and "profile" not in route
     assert ensure.calls == []
 
 
@@ -381,12 +385,20 @@ def test_route_right_after_a_suspend_waits_for_the_machine_to_go_down_then_wakes
     assert "busy" in sleeper.sleep_now(nas)  # the routed child now keeps it awake
 
 
-def test_route_gives_up_waiting_for_down_after_twenty_seconds():
+def test_route_waits_for_down_as_long_as_sending_the_sleep_can_take():
+    provider, sleeper, clock, log, routed = _racing([True] * 45 + [False])  # the sleep took 45s to land
+    nas = fleet(_config(machines=MACHINES))[0]["nas"]
+    sleeper.sleep_now(nas)
+    provider.route_task(_task(machine="nas"), _config(machines=MACHINES))
+    assert log.count("probe") == 46 and log[-1] == "ensure"
+
+
+def test_route_gives_up_waiting_for_down_after_a_minute():
     provider, sleeper, clock, log, routed = _racing([True] * 100)
     nas = fleet(_config(machines=MACHINES))[0]["nas"]
     sleeper.sleep_now(nas)
     provider.route_task(_task(machine="nas"), _config(machines=MACHINES))
-    assert log[-1] == "ensure" and 19 <= sum(clock.sleeps) <= 21 and routed == ["nas"]
+    assert log[-1] == "ensure" and 59 <= sum(clock.sleeps) <= 61 and routed == ["nas"]
 
 
 def test_normal_route_never_probes_for_down_and_releases_the_claim():
@@ -402,3 +414,57 @@ def test_failed_route_releases_its_claims():
     with pytest.raises(DelegationRouteError):
         provider.route_task(_task(machine="nas"), _config(machines=MACHINES))
     assert sleeper._claims == {}
+
+
+# Audit: a machine woken too late, and the fleet as seen from a flota-<machine> profile.
+
+class Timers(list):
+    def __call__(self, interval, function):
+        from types import SimpleNamespace
+        self.append(SimpleNamespace(interval=interval, function=function, start=lambda: None,
+                                    cancel=lambda: None))
+        return self[-1]
+
+
+def test_a_machine_that_did_not_wake_in_time_is_looked_at_again():
+    from flota_plugin.idle import IdleSleeper
+    timers = Timers()
+    sleeper = IdleSleeper(timer=timers, probe=lambda host, port: True)
+    machines = {**MACHINES, "desktop": {**MACHINES["desktop"], "sleep": "suspend", "sleep_after": "5m"}}
+    provider = FlotaDelegationProvider(ensure=Ensure("desktop"), sleeper=sleeper)
+    out = provider.route_task(_task(machine="desktop"), _config(machines=machines))
+    assert out["label"] == "flota:laptop (fallback for desktop)"
+    assert [t.interval for t in timers] == [90.0]  # one look, after another wake_timeout
+    timers[0].function()  # it finished booting meanwhile
+    assert timers[1].interval == 300.0
+
+
+def test_a_machine_that_cannot_be_woken_is_not_watched():
+    from flota_plugin.idle import IdleSleeper
+    timers = Timers()
+    machines = {"nas": {**MACHINES["nas"], "sleep": "suspend", "sleep_after": "5m"}}
+    provider = FlotaDelegationProvider(ensure=Ensure("nas"), sleeper=IdleSleeper(timer=timers))
+    with pytest.raises(DelegationRouteError):
+        provider.route_task(_task(machine="nas"), _config(machines=machines))
+    assert timers == []
+
+
+def test_panel_and_tool_read_the_owner_profile_from_a_plumbing_profile(tmp_path, monkeypatch):
+    import hermes_cli.config as config_mod
+    from hermes_constants import get_hermes_home, reset_hermes_home_override, set_hermes_home_override
+    from flota_plugin import tool
+    plumbing = tmp_path / "profiles" / "flota-desktop"
+    plumbing.mkdir(parents=True)
+
+    def load():
+        fresh = str(get_hermes_home()) == str(tmp_path)
+        return {"plugins": {"entries": {"flota": {"settings": {"default": "new" if fresh else "stale"}}}}}
+
+    monkeypatch.setattr(config_mod, "load_config_readonly", load)
+    token = set_hermes_home_override(str(plumbing))
+    try:
+        assert REAL_PANEL() == {"default": "new"}
+        assert tool._effective(tool._load_config())["default"] == "new"
+        assert str(get_hermes_home()) == str(plumbing)
+    finally:
+        reset_hermes_home_override(token)

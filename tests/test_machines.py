@@ -286,3 +286,10 @@ def test_macos_hibernate_becomes_suspend_with_a_problem():
     loaded, problems = load({"box": {**OK, "os": "macos", "sleep": "hibernate"}})
     assert loaded["box"].sleep == "suspend"
     assert "hibernate" in only_problem(problems, "box")
+
+
+@pytest.mark.parametrize("given, kept", [(0, 10.0), ("3s", 10.0), ("6h", 600.0), ("2m", 120.0)])
+def test_wake_timeout_is_clamped_to_10s_10min(given, kept):
+    loaded, problems = load({"a": {**OK, "wake_timeout": given}})
+    assert loaded["a"].wake_timeout == kept
+    assert bool(problems) == (kept != parse_duration(given, 90.0))

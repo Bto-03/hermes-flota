@@ -70,7 +70,7 @@ def _epoch(raw) -> float | None:
 
 
 def _mentions(text: str, name: str) -> bool:
-    # Whole word, case-insensitive: 'flota-escritorio' names escritorio, 'escritorios' does not.
+    # Whole word, case-insensitive: 'flota-studio' names studio, 'studios' does not.
     return re.search(rf"(?<![a-z0-9]){re.escape(name.lower())}(?![a-z0-9])", text.lower()) is not None
 
 
@@ -86,8 +86,11 @@ def targets(job: Mapping, name: str) -> bool:
     return _mentions(" ".join(words), name)
 
 
-def next_job_for(machine_name: str, jobs, *, now: float | None = None) -> tuple[float, Mapping] | None:
-    """(run time, job) of the soonest enabled future job that names the machine."""
+def next_job_for(machine_name: str, jobs, *, now: float | None = None,
+                 others=None) -> tuple[float, Mapping] | None:
+    """(run time, job) of the soonest enabled future job that names the machine. ``others``: the
+    other machines' names when this one is the fleet's ``default``; it gets every task without a
+    ``machine``, so a job that names none of the others counts too."""
     now = time.time() if now is None else now
     best = None
     for job in jobs or ():
@@ -96,7 +99,10 @@ def next_job_for(machine_name: str, jobs, *, now: float | None = None) -> tuple[
         if job.get("state") in ("paused", "completed", "disabled"):
             continue
         when = _epoch(job.get("next_run_at"))
-        if when is None or when <= now or not targets(job, machine_name):
+        if when is None or when <= now:
+            continue
+        if not targets(job, machine_name) and (
+                others is None or any(targets(job, other) for other in others)):
             continue
         if best is None or when < best[0]:
             best = (when, job)
@@ -127,6 +133,23 @@ def cron_jobs():
             return importlib.import_module("cron.jobs").list_jobs(include_disabled=True)
     except Exception:
         logger.warning("flota: could not read the cron jobs", exc_info=True)
+        return None
+
+
+def others_when_default(machine_name: str):
+    """The other machines' names when ``machine_name`` is the configured ``default``, else None."""
+    try:
+        from hermes_cli.config import load_config_readonly
+        from .home import owner_scope
+        from .settings import effective, plugin_settings_from_config
+        with owner_scope():
+            config = load_config_readonly() or {}
+        fleet = effective(config.get("delegation"), plugin_settings_from_config(config))
+        default = fleet.get("default")
+        if not isinstance(default, str) or default.strip() != machine_name:
+            return None
+        return [str(name).strip() for name in fleet["machines"] if str(name).strip() != machine_name]
+    except Exception:
         return None
 
 
@@ -161,13 +184,18 @@ def armed_at(name: str, path=None) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
-def _record(path, name: str, when: float) -> None:
+def _record(path, name: str, when: float | None) -> None:
+    """Remember the alarm of ``name``; ``when=None`` forgets it."""
     if path is None:
         return
     try:
         path = Path(path)
         data = _read(path)
+        if when is None and name not in data:
+            return
         data[name] = when
+        if when is None:
+            del data[name]
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f"{path.name}.{_os.getpid()}.tmp")
         tmp.write_text(json.dumps(data))
@@ -288,17 +316,44 @@ def arm(machine, when_epoch: float, run=subprocess.run, *, now=time.time, state_
     return f"{machine.name} wakes itself at {format_when(when_epoch, now())}"
 
 
-def arm_before_sleep(machine, run=subprocess.run, jobs=None, now=time.time) -> str:
+def _clear(machine, run) -> bool:
+    """Best effort: cancel the alarm set earlier. macOS and the Linux sudoers route have no
+    password-less way to do it."""
+    os = getattr(machine, "os", "linux")
+    if os == "macos":
+        return False
+    posix = f"f={_WAKEALARM}; [ -w $f ] && echo 0 > $f && echo cleared=yes"
+    powershell = (f"Unregister-ScheduledTask -TaskName '{TASK_NAME}' -Confirm:$false "
+                  "-ErrorAction SilentlyContinue\n'cleared=yes'\n")
+    try:
+        done = run(ssh_argv(machine, _remote(os, posix, powershell)), timeout=_TIMEOUT,
+                   capture_output=True, text=True)
+    except (subprocess.TimeoutExpired, OSError, ValueError):
+        return False
+    return done.returncode == 0 and _kv(done.stdout).get("cleared") == "yes"
+
+
+def arm_before_sleep(machine, run=subprocess.run, jobs=None, now=time.time, others=None) -> str:
     """Called by power.power before a suspend/hibernate. Returns a note for the result line;
-    raises WakeTimerError when the machine must not be put to sleep."""
+    raises WakeTimerError when the machine must not be put to sleep. ``others``: see next_job_for
+    (looked up in the config when the jobs are)."""
     if jobs is None:
         jobs = cron_jobs()
         if jobs is None:
             raise WakeTimerError("cannot read the cron jobs, so its wake timer cannot be set")
+        others = others_when_default(machine.name)
     current = now()
-    found = next_job_for(machine.name, jobs, now=current)
+    found = next_job_for(machine.name, jobs, now=current, others=others)
     if found is None:
-        return "no upcoming job names it, so it sleeps until someone turns it on"
+        note = "no upcoming job names it, so it sleeps until someone turns it on"
+        path = state_path()
+        old = armed_at(machine.name, path)
+        if old is not None:  # an alarm armed for a job that is gone: no ghost wake-up
+            if old <= current or _clear(machine, run):
+                _record(path, machine.name, None)
+            else:
+                note += f" (its earlier wake timer at {format_when(old, current)} could not be cleared)"
+        return note
     lead = getattr(machine, "timer_lead", DEFAULT_LEAD)
     when = max(found[0] - lead, current + MIN_AHEAD)
     arm(machine, when, run=run, now=lambda: current)

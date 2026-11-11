@@ -53,6 +53,8 @@ def store(monkeypatch):
     monkeypatch.setattr(slash, "_profile_exists", lambda name: False)
     monkeypatch.setattr(slash, "is_up", lambda host, port: False)
     monkeypatch.setattr(cli, "_read_busy", lambda: None)  # no gateway state file
+    monkeypatch.setattr(cli, "_key_is_file", lambda path: True)
+    monkeypatch.setattr(cli, "_home", lambda: Path("/fake-home/user"))
     configs.detected = []
 
     def detect(machine):  # never real ssh; tests that care replace it
@@ -61,8 +63,8 @@ def store(monkeypatch):
 
     monkeypatch.setattr(cli, "_detect_prefix", detect)
     # Detection seams: away by default, so no test reaches a network; detection tests turn it on.
-    configs.probes = []
-    monkeypatch.setattr(cli, "_is_up", lambda machine: configs.probes.append("tcp") or False)
+    configs.probes, configs.up = [], True  # the port answers; detection finds nothing unless a test says so
+    monkeypatch.setattr(cli, "_is_up", lambda machine: configs.probes.append("tcp") or configs.up)
     monkeypatch.setattr(cli, "_detect_os", lambda machine: configs.probes.append("os") or "")
     monkeypatch.setattr(cli, "_detect_network", lambda machine, os: configs.probes.append("net") or {})
     return configs
@@ -350,18 +352,12 @@ def test_setup_accepts_a_relay_once_via_is_in_the_config(store):
     (("--wake", "wol_via", "--mac", "aa:bb:cc:dd:ee:ff"), "needs 'via'"),
     (("--wake", "command"), "needs 'wake_command'"),
     (("--port", "70000"), "port must be"),
-    (("--host", " "), "non-empty 'profile' and 'host'"),
+    (("--host", " "), "setup needs a host"),
 ])
 def test_setup_refuses_an_invalid_machine_before_writing(store, capsys, extra, reason):
     assert main("setup", "torre", "--host", "10.0.0.5", "--user", "carol", *extra) == 2
     assert reason in capsys.readouterr().err
     assert store == {ACTIVE: START} and store.log == []
-
-
-def test_setup_refuses_a_name_that_is_not_a_profile_id(store, capsys):
-    assert main("setup", "Bad Name!", "--host", "h", "--user", "u") == 2
-    assert "Invalid profile name" in capsys.readouterr().err
-    assert store == {ACTIVE: START}
 
 
 def test_setup_reports_a_refused_write(store, capsys, monkeypatch):
@@ -384,6 +380,7 @@ def test_setup_with_real_core(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HERMES_HOME", str(home))
     monkeypatch.setattr(cli, "_detect_prefix", lambda machine: ("", "systemctl works directly"))  # no real ssh
     monkeypatch.setattr(cli, "_is_up", lambda machine: False)  # no real network probing either
+    monkeypatch.setattr(cli, "_key_is_file", lambda path: True)
     assert cli._active_config_path() == home / "config.yaml"  # never the developer's real ~/.hermes
     (home / "config.yaml").write_text(
         "# mine\nmodel:\n  default: some/model\n  provider: openrouter\n"
@@ -424,7 +421,7 @@ def test_setup_with_real_core(tmp_path, monkeypatch, capsys):
 
 NET = {"interface": "enp8s0", "mac": "00:11:22:33:44:55", "broadcast": "198.51.100.255", "wol": "enabled",
        "connection": "Wired connection 1", "reason": ""}
-MINIMAL = ("setup", "escritorio", "--host", "192.0.2.28", "--user", "alice")
+MINIMAL = ("setup", "studio", "--host", "192.0.2.28", "--user", "alice")
 
 
 @pytest.fixture
@@ -440,8 +437,8 @@ def reachable(store, monkeypatch):
 
 def test_minimal_setup_detects_os_mac_broadcast_and_picks_wol(reachable, capsys):
     assert main(*MINIMAL) == 0
-    assert machines(reachable[ACTIVE])["escritorio"] == {
-        "profile": "flota-escritorio", "host": "192.0.2.28", "user": "alice", "port": 22,
+    assert machines(reachable[ACTIVE])["studio"] == {
+        "profile": "flota-studio", "host": "192.0.2.28", "user": "alice", "port": 22,
         "os": "linux", "wake": "wol", "mac": "00:11:22:33:44:55", "broadcast": "198.51.100.255"}
     assert reachable.probes == ["os", ("net", "192.0.2.28", "linux")]
     out = capsys.readouterr().out
@@ -452,13 +449,13 @@ def test_minimal_setup_detects_os_mac_broadcast_and_picks_wol(reachable, capsys)
 
 def test_explicit_flags_win_over_detection(reachable):
     assert main(*MINIMAL, "--wake", "none", "--mac", "aa:bb:cc:dd:ee:ff", "--broadcast", "10.0.0.255") == 0
-    entry = machines(reachable[ACTIVE])["escritorio"]
+    entry = machines(reachable[ACTIVE])["studio"]
     assert (entry["wake"], entry["mac"], entry["broadcast"]) == ("none", "aa:bb:cc:dd:ee:ff", "10.0.0.255")
 
 
 def test_explicit_wol_takes_the_detected_mac(reachable):
     assert main(*MINIMAL, "--wake", "wol") == 0
-    assert machines(reachable[ACTIVE])["escritorio"]["mac"] == "00:11:22:33:44:55"
+    assert machines(reachable[ACTIVE])["studio"]["mac"] == "00:11:22:33:44:55"
 
 
 def test_disabled_wol_prints_how_to_enable_it(reachable, capsys):
@@ -468,7 +465,7 @@ def test_disabled_wol_prints_how_to_enable_it(reachable, capsys):
     print(out)
     assert "wake-on-lan disabled" in out and "as root: ethtool -s enp8s0 wol g" in out
     assert "802-3-ethernet.wake-on-lan magic" in out and "BIOS" in out
-    assert machines(reachable[ACTIVE])["escritorio"]["wake"] == "wol"  # the MAC is right; only the NIC needs a fix
+    assert machines(reachable[ACTIVE])["studio"]["wake"] == "wol"  # the MAC is right; only the NIC needs a fix
 
 
 def test_reachable_but_no_mac_keeps_wake_none(reachable, capsys):
@@ -476,15 +473,16 @@ def test_reachable_but_no_mac_keeps_wake_none(reachable, capsys):
                      "reason": "no default route found"}
     reachable.os = ""
     assert main(*MINIMAL) == 0
-    entry = machines(reachable[ACTIVE])["escritorio"]
+    entry = machines(reachable[ACTIVE])["studio"]
     assert entry["wake"] == "none" and "os" not in entry and "mac" not in entry
     assert "no default route found" in capsys.readouterr().out
 
 
 def test_unreachable_machine_is_saved_and_detection_skipped(store, capsys):
+    store.up = False
     assert main(*MINIMAL) == 0
     assert store.probes == ["tcp"]
-    entry = machines(store[ACTIVE])["escritorio"]
+    entry = machines(store[ACTIVE])["studio"]
     assert entry["wake"] == "none" and "os" not in entry
     assert "Detection skipped" in capsys.readouterr().out
 
@@ -492,7 +490,7 @@ def test_unreachable_machine_is_saved_and_detection_skipped(store, capsys):
 def test_no_detect_probes_nothing(reachable, capsys):
     assert main(*MINIMAL, "--no-detect", "--sleep", "none") == 0
     assert reachable.probes == [] and reachable.detected == []
-    assert machines(reachable[ACTIVE])["escritorio"]["wake"] == "none"
+    assert machines(reachable[ACTIVE])["studio"]["wake"] == "none"
 
 
 def test_os_detection_missing_from_power_is_treated_as_unknown(store, monkeypatch):
@@ -501,7 +499,7 @@ def test_os_detection_missing_from_power_is_treated_as_unknown(store, monkeypatc
     monkeypatch.setattr(cli, "_detect_os", cli._real_detect_os)
     monkeypatch.setattr(cli, "_detect_network", lambda machine, os: dict(NET))
     assert main(*MINIMAL) == 0
-    entry = machines(store[ACTIVE])["escritorio"]
+    entry = machines(store[ACTIVE])["studio"]
     assert "os" not in entry and entry["wake"] == "wol"
 
 
@@ -514,16 +512,16 @@ def test_setup_with_detection_is_idempotent(reachable, capsys):
 
 def test_rerun_keeps_a_relay_wake_method(reachable):
     assert main(*MINIMAL) == 0
-    machines(reachable[ACTIVE])["escritorio"].update(wake="wol_via", via="pi@relay")
+    machines(reachable[ACTIVE])["studio"].update(wake="wol_via", via="pi@relay")
     assert main(*MINIMAL) == 0
-    assert machines(reachable[ACTIVE])["escritorio"]["wake"] == "wol_via"
+    assert machines(reachable[ACTIVE])["studio"]["wake"] == "wol_via"
 
 
 # --- doctor --------------------------------------------------------------------------------------
 
 @pytest.fixture
 def doctor(reachable, monkeypatch):
-    """escritorio set up and healthy; tests break one thing at a time."""
+    """studio set up and healthy; tests break one thing at a time."""
     assert main(*MINIMAL) == 0
     reachable.ssh = (True, "")
     reachable.lan = ["198.51.100.30/24"]
@@ -535,14 +533,14 @@ def doctor(reachable, monkeypatch):
 
 
 def test_doctor_says_file_sync_is_off(doctor, capsys):
-    code, out = run_doctor(capsys, "escritorio")
+    code, out = run_doctor(capsys, "studio")
     assert code == 0 and "file sync off" in out
 
 
 def test_doctor_fails_when_the_ssh_file_sync_guard_is_missing(doctor, monkeypatch, capsys):
     # Without the guard core tars the machine's whole ~/.hermes back after every subagent.
     monkeypatch.setattr(cli, "_file_sync_guarded", lambda: False)
-    code, out = run_doctor(capsys, "escritorio")
+    code, out = run_doctor(capsys, "studio")
     assert code == 1
     assert "✗ SSH file sync" in out and "~/.hermes" in out
 
@@ -556,70 +554,71 @@ def run_doctor(capsys, *names):
 
 
 def test_doctor_all_good(doctor, capsys):
-    code, out = run_doctor(capsys, "escritorio")
+    code, out = run_doctor(capsys, "studio")
     assert code == 0 and "✗" not in out
-    for text in ("SSH", "flota-escritorio", "wol", "Wake-on-LAN enabled on enp8s0", "sleep", "198.51.100.0/24"):
+    for text in ("SSH", "flota-studio", "wol", "Wake-on-LAN enabled on enp8s0", "sleep", "198.51.100.0/24"):
         assert text in out
 
 
 def test_doctor_checks_every_machine_without_an_argument(doctor, capsys):
     code, out = run_doctor(capsys)
-    assert "escritorio" in out and "mini" in out
+    assert "studio" in out and "mini" in out
 
 
 def test_doctor_wol_disabled_fails_with_the_fix(doctor, capsys):
     doctor.net["wol"] = "disabled"
-    code, out = run_doctor(capsys, "escritorio")
+    code, out = run_doctor(capsys, "studio")
     assert code == 1 and "✗ Wake-on-LAN disabled on enp8s0" in out and "as root: ethtool -s enp8s0 wol g" in out
 
 
 def test_doctor_notes_that_power_off_needs_wol_from_s5(doctor, capsys):
-    code, out = run_doctor(capsys, "escritorio")
+    code, out = run_doctor(capsys, "studio")
     assert code == 0 and "? power off: waking from power-off (S5) needs Wake-on-LAN from S5 enabled in the BIOS" in out
 
 
 def test_doctor_unknown_wol_is_not_a_failure(doctor, capsys):
     doctor.net["wol"] = "unknown"
-    code, out = run_doctor(capsys, "escritorio")
+    code, out = run_doctor(capsys, "studio")
     assert code == 0 and "? Wake-on-LAN" in out
 
 
 def test_doctor_unreachable_machine(doctor, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_is_up", lambda machine: False)
-    code, out = run_doctor(capsys, "escritorio")
-    assert code == 1 and "✗ SSH" in out and "hermes flota wake escritorio" in out
+    code, out = run_doctor(capsys, "studio")
+    assert code == 1 and "✗ SSH" in out and "hermes flota wake studio" in out
     assert "? Wake-on-LAN" in out and "? sleep" in out
 
 
 def test_doctor_ssh_login_refused(doctor, capsys):
     doctor.ssh = (False, "Permission denied (publickey).")
-    code, out = run_doctor(capsys, "escritorio")
+    code, out = run_doctor(capsys, "studio")
     assert code == 1 and "Permission denied" in out and "ssh-copy-id alice@192.0.2.28" in out
 
 
 def test_doctor_other_lan_suggests_a_relay(doctor, capsys):
     doctor.lan = ["10.8.0.2/24"]
-    code, out = run_doctor(capsys, "escritorio")
+    code, out = run_doctor(capsys, "studio")
     assert code == 1 and "wol_via" in out
 
 
 def test_doctor_profile_pointing_elsewhere(doctor, capsys):
-    doctor[PROFILES / "flota-escritorio" / "config.yaml"]["terminal"]["ssh_host"] = "old.lan"
-    code, out = run_doctor(capsys, "escritorio")
-    assert code == 1 and "old.lan" in out and "hermes flota setup escritorio" in out
+    doctor[PROFILES / "flota-studio" / "config.yaml"]["terminal"]["ssh_host"] = "old.lan"
+    code, out = run_doctor(capsys, "studio")
+    assert code == 1 and "old.lan" in out and "hermes flota setup studio" in out
 
 
 def test_doctor_wake_none_and_sleep_check(doctor, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_detect_prefix", lambda machine: (None, "torre: polkit does not let ..."))
-    machines(doctor[ACTIVE])["escritorio"]["wake"] = "none"
-    code, out = run_doctor(capsys, "escritorio")
+    # settings no longer auto-sleeps a machine nothing can wake, so the sleep check needs an explicit sleep
+    machines(doctor[ACTIVE])["studio"].update(wake="none", sleep="suspend")
+    code, out = run_doctor(capsys, "studio")
     assert code == 1 and "✗ no wake method" in out and "✗ sleep" in out and "polkit" in out
 
 
 def test_doctor_sleep_none_skips_the_sleep_check(doctor, capsys):
-    machines(doctor[ACTIVE])["escritorio"]["sleep"] = "none"
+    machines(doctor[ACTIVE])["studio"]["sleep"] = "none"
     doctor.detected.clear()
-    code, out = run_doctor(capsys, "escritorio")
+    code, out = run_doctor(capsys, "studio")
     assert code == 0 and doctor.detected == []
 
 
@@ -645,3 +644,37 @@ def test_setup_extra_keys_and_os_flag(store):
     cli.run_setup(SimpleNamespace(name="torre", host="h", user="u", os="macos", extra={"crew_names": ["Lia"]}))
     entry = machines(store[ACTIVE])["torre"]
     assert entry["os"] == "macos" and entry["crew_names"] == ["Lia"]
+
+
+def test_setup_prints_the_effective_sleep_not_a_panel_default(store, capsys):
+    assert main(*SETUP) == 0
+    assert "(wake: wol, sleep: suspend after 10m idle)" in capsys.readouterr().out
+    assert main("setup", "nas", "--host", "nas.lan", "--user", "admin", "--no-detect") == 0
+    out = capsys.readouterr().out
+    assert "(wake: none, sleep: none)" in out and "panel default" not in out
+
+
+def test_remove_never_deletes_a_flota_named_profile_the_user_made(store, monkeypatch, tmp_path):
+    """A `flota-<name>` profile that existed before setup is adopted, not Flota's to delete."""
+    real = tmp_path / "profiles"
+    monkeypatch.setattr(cli, "_profile_dir", lambda name: real / name)
+    monkeypatch.setattr(cli, "_hide_plumbing", lambda profile_dir, machine: False)
+    deleted = []
+    monkeypatch.setattr(cli, "_delete_profile", deleted.append)
+    (real / "flota-lab").mkdir(parents=True)  # the user's own profile, no owner marker
+    store[PROFILES / "flota-lab" / "config.yaml"] = {}
+    store.log.clear()
+    assert main("setup", "lab", "--host", "10.0.0.8", "--user", "carol", "--no-detect") == 0
+    assert ("create", "flota-lab") not in store.log
+    assert main("remove", "lab") == 0
+    assert deleted == []
+
+    def create(name):  # control: one Flota creates is still deleted with its machine
+        (real / name).mkdir(parents=True)
+        store[PROFILES / name / "config.yaml"] = {}
+        return real / name
+
+    monkeypatch.setattr(cli, "_create_profile", create)
+    assert main("setup", "lab2", "--host", "10.0.0.9", "--user", "carol", "--no-detect") == 0
+    assert main("remove", "lab2") == 0
+    assert deleted == ["flota-lab2"]

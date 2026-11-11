@@ -8,7 +8,7 @@ OLD = {"backends": {"flota": {"machines": {"pc": {"profile": "pc", "host": "h"}}
 
 def test_falls_back_to_delegation_config():
     out = settings.effective(OLD, None)
-    assert out["machines"] == {"pc": {"profile": "pc", "host": "h", "sleep_after": "10m", "sleep": "suspend"}}
+    assert out["machines"] == {"pc": {"profile": "pc", "host": "h", "sleep": "none"}}  # no wake: stays on
     assert out["default"] == "pc" and out["cache_ttl"] == "7m"
     assert out["allow_power_off"] is True and out["agent_tool"] is True
 
@@ -31,10 +31,10 @@ def test_nothing_configured():
 
 def test_machine_values_win_over_panel_defaults():
     panel = {"sleep_after": "3m", "sleep_action": "hibernate",
-             "machines": {"a": {"sleep_after": "1h", "sleep": "none"}, "b": {}}}
+             "machines": {"a": {"sleep_after": "1h", "sleep": "none"}, "b": {"wake": "timer"}}}
     out = settings.effective(None, panel)["machines"]
     assert out["a"] == {"sleep_after": "1h", "sleep": "none"}
-    assert out["b"] == {"sleep_after": "3m", "sleep": "hibernate"}
+    assert out["b"] == {"wake": "timer", "sleep_after": "3m", "sleep": "hibernate"}
 
 
 def test_auto_sleep_off_forces_zero():
@@ -52,10 +52,11 @@ def test_poweroff_sleep_needs_a_wake_method_and_the_master_switch():
     out = settings.effective(None, panel)
     assert out["allow_power_off"] is True
     assert {n: m["sleep"] for n, m in out["machines"].items()} == {
-        "a": "poweroff", "b": "poweroff", "c": "poweroff", "d": "poweroff", "bare": "suspend", "none": "suspend"}
+        "a": "poweroff", "b": "poweroff", "c": "poweroff", "d": "poweroff", "bare": "none", "none": "none"}
     out = settings.effective(None, {**panel, "allow_power_off": False})
     assert out["allow_power_off"] is False
-    assert {m["sleep"] for m in out["machines"].values()} == {"suspend"}
+    assert {n: m["sleep"] for n, m in out["machines"].items()} == {
+        "a": "suspend", "b": "suspend", "c": "suspend", "d": "suspend", "bare": "none", "none": "none"}
 
 
 def test_power_off_refusal_per_machine():
@@ -99,3 +100,18 @@ def test_poweroff_with_stray_spaces_still_needs_permission():
     from flota_plugin.machines import load_machines
     out = settings.effective(None, {"machines": {"a": {"profile": "p", "host": "h", "sleep": " poweroff "}}})
     assert load_machines(out)[0]["a"].sleep == "suspend"
+
+
+def test_a_machine_flota_cannot_wake_is_not_auto_slept_by_default():
+    machines = settings.effective(None, {"sleep_action": "hibernate", "machines": {
+        "srv": {"profile": "srv", "host": "h"},
+        "srv2": {"profile": "srv2", "host": "h", "wake": " none "},
+        "own": {"profile": "own", "host": "h", "wake": "none", "sleep": "suspend"},
+        "alarm": {"profile": "alarm", "host": "h", "wake_timer": True},
+        "timer": {"profile": "timer", "host": "h", "wake": "timer"},
+        "wol": {"profile": "wol", "host": "h", "wake": "wol", "mac": "aa:bb:cc:dd:ee:ff"}}})["machines"]
+    assert machines["srv"]["sleep"] == machines["srv2"]["sleep"] == "none"
+    assert "sleep_after" not in machines["srv"]
+    assert machines["own"]["sleep"] == "suspend" and machines["own"]["sleep_after"] == "10m"  # explicit wins
+    assert [machines[n]["sleep"] for n in ("alarm", "timer", "wol")] == ["hibernate"] * 3
+
