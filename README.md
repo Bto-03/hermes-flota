@@ -8,7 +8,7 @@ Your desktop can take the heavy builds, local models and long jobs without stayi
 
 **Measured on real hardware** (2026-11-10, a Linux home server driving a Linux desktop over Tailscale, Wake-on-LAN on the LAN): waking the suspended desktop took **19-42 s** until SSH answered; a scheduled job woke it (about **27 s**), ran there, and Flota suspended it **2 minutes** after the job (`sleep_after: 2m`); Flota refused to sleep the desktop while a subagent was running on it.
 
-▶ **Demo video:** VIDEO_URL_PLACEHOLDER
+▶ **Demo video (88 s):** [watch on X](https://x.com/Alberto47045726/status/2120526319301910729)
 
 ## Why it has to be a plugin
 
