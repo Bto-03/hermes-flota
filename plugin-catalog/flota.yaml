@@ -3,7 +3,7 @@
 name: flota
 title: Flota
 repo: https://github.com/Bto-03/hermes-flota
-sha: b2eef47c73216437a6451a0a6342e6918112150e
+sha: 4c2e089f8ab333373baf72b94645993e15fc47c3
 version: "0.2.1"
 description: >-
   Run delegate_task subagents on your own machines over SSH (delegation.backend: flota). Flota
