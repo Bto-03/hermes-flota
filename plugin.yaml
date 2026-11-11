@@ -1,0 +1,54 @@
+name: flota
+label: Flota
+kind: standalone
+version: 0.2.0
+author: Francisco Bastidas
+description: >
+  Run delegate_task subagents on your own machines over SSH
+  (delegation.backend: flota). Flota wakes the chosen machine if it is
+  asleep (Wake-on-LAN, a relay host on its LAN, or any command such as a
+  smart plug), falls back to another machine if it does not come up, and
+  suspends it after its last subagent. `hermes flota setup` detects each
+  machine's MAC, broadcast and sleep method over SSH; `hermes flota doctor`
+  checks it and prints fixes; `/flota dry-run <machine>` explains every step
+  without sending anything. Python standard library only.
+requires_hermes: ">=0.22.5"
+provides_tools: [flota]
+provides_hooks: [subagent_start, subagent_stop]
+config_schema:
+  auto_sleep:
+    type: bool
+    label: Auto-sleep
+    description: Put machines back to sleep after their last subagent.
+    default: true
+  sleep_after:
+    type: str
+    label: Sleep after
+    description: Idle time before auto-sleep (e.g. 10m, 1h), for machines that do not set their own sleep_after.
+    default: 10m
+  sleep_action:
+    type: str
+    choices: [suspend, hibernate, poweroff]
+    label: Sleep action
+    description: What auto-sleep does, for machines that do not set their own sleep.
+    default: suspend
+  allow_power_off:
+    type: bool
+    label: Allow power off
+    description: Allow powering off machines that Flota can wake again (Wake-on-LAN or a wake command). Machines without a wake method can only be suspended.
+    default: true
+  agent_tool:
+    type: bool
+    label: Agent tool
+    description: Give the agent the flota tool to check, wake, suspend or power off your machines.
+    default: true
+  cache_ttl:
+    type: str
+    label: Prompt cache lifetime
+    description: How long the provider's prompt cache lives, quoted when the agent is told to replace a silent subagent instead of reviving it.
+    default: 5m
+  machines:
+    type: dict
+    label: Machines
+    description: Your machines by name (profile, host, wake, mac, ...); `hermes flota setup` fills it.
+    default: {}

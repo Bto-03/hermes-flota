@@ -1,0 +1,177 @@
+/* Flota dashboard tab. Colours come from the host theme's CSS variables (dark and light). */
+.flota-page {
+  --flota-up: var(--color-success, #22c55e);
+  --flota-wake: var(--color-warning, #f59e0b);
+  --flota-down: var(--color-muted-foreground, #8a8f98);
+  --flota-hub: var(--color-primary, #6366f1);
+  --flota-busy: var(--color-warning, #f59e0b);
+  --flota-bg: var(--color-card, var(--color-background, #111));
+  display: flex; flex-direction: column; gap: 1rem; width: 100%; padding: 0.25rem 0;
+}
+.flota-header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 1rem; }
+.flota-title { margin: 0; font-size: 1.5rem; font-weight: 700; letter-spacing: 0.08em; color: var(--color-foreground); }
+.flota-subtitle { margin: 0.25rem 0 0; font-size: 0.85rem; color: var(--color-muted-foreground); }
+.flota-header-actions, .flota-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+.flota-actions { margin-top: 0.75rem; }
+.flota-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr)); gap: 1rem; }
+.flota-card-header { gap: 0.35rem; }
+.flota-card-title-row { display: flex; align-items: center; gap: 0.6rem; }
+.flota-card-title { flex: 1; }
+.flota-desc { margin: 0; font-size: 0.8rem; color: var(--color-muted-foreground); }
+.flota-fields { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 0.9rem; font-size: 0.8rem; }
+.flota-field { display: contents; }
+.flota-field-label { color: var(--color-muted-foreground); }
+.flota-field-value { color: var(--color-foreground); overflow-wrap: anywhere; }
+.flota-remove { margin-left: auto; }
+.flota-tooltip-wrap { display: inline-flex; cursor: not-allowed; }
+
+/* Cards: icon in the state colour, highlight when picked on the map. */
+.flota-card-wrap { display: flex; scroll-margin: 5rem; transition: transform 0.2s ease; }
+.flota-card-wrap > .flota-card { flex: 1; transition: box-shadow 0.25s ease, border-color 0.25s ease; }
+.flota-card-selected > .flota-card { border-color: var(--flota-hub); box-shadow: 0 0 0 1px var(--flota-hub), 0 0 1.4rem color-mix(in srgb, var(--flota-hub) 22%, transparent); }
+.flota-card-icon { width: 1.6rem; height: 1.6rem; flex: none; }
+.flota-card-icon .flota-glyph { stroke: var(--flota-down); }
+.flota-card-icon-up .flota-glyph { stroke: var(--flota-up); }
+.flota-card-icon-waking .flota-glyph { stroke: var(--flota-wake); }
+.flota-section-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.5rem; margin-top: 0.25rem; }
+.flota-section-head h2 { margin: 0; font-size: 0.8rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-muted-foreground); }
+.flota-link-btn { background: none; border: 0; padding: 0; color: var(--flota-hub); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+
+.flota-dot { width: 0.7rem; height: 0.7rem; border-radius: 50%; flex: none; background: var(--color-muted-foreground); opacity: 0.6; }
+.flota-dot-up { background: var(--flota-up); opacity: 1; box-shadow: 0 0 0.4rem var(--flota-up); }
+.flota-dot-waking { background: var(--flota-wake); opacity: 1; animation: flota-pulse 1.2s ease-in-out infinite; }
+@keyframes flota-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.8); } }
+
+.flota-error, .flota-warn, .flota-ok, .flota-hint { font-size: 0.8rem; padding: 0.5rem 0.75rem; border: 1px solid; margin: 0.5rem 0 0; }
+.flota-error { color: var(--color-destructive); border-color: color-mix(in srgb, var(--color-destructive) 40%, transparent); background: color-mix(in srgb, var(--color-destructive) 10%, transparent); }
+.flota-warn { color: var(--color-warning); border-color: color-mix(in srgb, var(--color-warning) 40%, transparent); background: color-mix(in srgb, var(--color-warning) 10%, transparent); }
+.flota-ok { color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 40%, transparent); background: color-mix(in srgb, var(--color-success) 10%, transparent); }
+.flota-hint { color: var(--color-muted-foreground); border-color: var(--color-border); }
+.flota-error ul, .flota-warn ul { margin: 0.35rem 0 0; padding-left: 1.1rem; }
+.flota-page code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.75rem; background: transparent !important; color: inherit; overflow-wrap: anywhere; }
+.flota-muted { font-size: 0.8rem; color: var(--color-muted-foreground); }
+.flota-footnote { margin-top: 0.5rem; }
+
+.flota-form { display: flex; flex-direction: column; gap: 0.5rem; }
+.flota-form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr)); gap: 0.75rem; }
+.flota-form-field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.8rem; }
+
+/* --- map ------------------------------------------------------------------------------------ */
+.flota-map-card { overflow: visible; }
+.flota-map-card > .flota-map-body { padding: 0.75rem 1rem 0.85rem; position: relative;
+  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--flota-hub) 7%, transparent) 0%, transparent 62%); }
+.flota-map-loading { position: absolute; top: 0.9rem; left: 1rem; margin: 0; }
+.flota-map { position: relative; width: 100%; max-width: 64rem; margin: 0 auto; }
+.flota-map-svg { display: block; width: 100%; height: auto; max-height: 72vh; overflow: visible; user-select: none; }
+.flota-map-svg text { font-family: inherit; paint-order: stroke; stroke: var(--background, var(--color-background, #000)); stroke-opacity: 0.85; stroke-width: 3px; stroke-linejoin: round; }
+
+.flota-orbit { fill: none; stroke: var(--color-border); stroke-width: 1; stroke-dasharray: 2 7; opacity: 0.8; }
+.flota-glyph { fill: none; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+/* links */
+.flota-link path { fill: none; stroke-linecap: round; transition: stroke 0.4s ease, opacity 0.4s ease, stroke-width 0.2s ease; }
+.flota-link { animation: flota-fade-in 0.6s ease-out both; }
+.flota-link-base { stroke-width: 1.6; }
+.flota-link-up .flota-link-base { stroke: var(--flota-up); opacity: 0.55; filter: drop-shadow(0 0 3px color-mix(in srgb, var(--flota-up) 60%, transparent)); }
+.flota-link-up .flota-link-flow { stroke: var(--flota-up); stroke-width: 2.6; stroke-dasharray: 2 26; opacity: 0.95; animation: flota-flow 2.4s linear infinite; }
+.flota-link-down .flota-link-base { stroke: var(--flota-down); stroke-dasharray: 3 6; opacity: 0.4; }
+.flota-link-waking .flota-link-base { stroke: var(--flota-wake); opacity: 0.25; }
+.flota-link-waking .flota-link-flow { stroke: var(--flota-wake); stroke-width: 2; stroke-dasharray: 7 7; opacity: 0.95; animation: flota-flow 0.9s linear infinite; }
+.flota-link-hot .flota-link-base { stroke-width: 2.4; opacity: 0.85; }
+@keyframes flota-flow { to { stroke-dashoffset: -28; } }
+
+/* hub */
+.flota-hub-glow-stop { stop-color: var(--flota-hub); }
+.flota-hub-halo { animation: flota-breathe 4s ease-in-out infinite; transform-origin: 0 0; }
+.flota-hub-ring { fill: none; stroke: var(--flota-hub); stroke-width: 1; opacity: 0.45; stroke-dasharray: 1 5; animation: flota-spin 40s linear infinite; transform-origin: 0 0; }
+.flota-hub-disc { fill: color-mix(in srgb, var(--flota-hub) 16%, var(--flota-bg)); stroke: var(--flota-hub); stroke-width: 2;
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--flota-hub) 55%, transparent)); }
+.flota-hub .flota-glyph { stroke: var(--flota-hub); stroke-width: 1.9; }
+.flota-hub-name { fill: currentColor; font-size: 15px; font-weight: 650; letter-spacing: 0.02em; }
+.flota-hub-sub { fill: var(--color-muted-foreground); font-size: 11.5px; }
+@keyframes flota-breathe { 0%, 100% { opacity: 0.75; transform: scale(0.95); } 50% { opacity: 1; transform: scale(1.05); } }
+@keyframes flota-spin { to { transform: rotate(360deg); } }
+
+/* machine nodes */
+.flota-node { cursor: pointer; outline: none; animation: flota-pop 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) both; transform-origin: 0 0; }
+.flota-hit { fill: transparent; stroke: none; }
+.flota-node-disc { fill: var(--flota-bg); stroke: var(--flota-down); stroke-width: 1.6; transition: stroke 0.4s ease, fill 0.4s ease, filter 0.4s ease; }
+.flota-node .flota-glyph { stroke: var(--flota-down); transition: stroke 0.4s ease; }
+.flota-node-name { fill: currentColor; font-size: 13px; font-weight: 600; }
+.flota-node-status { fill: var(--color-muted-foreground); font-size: 11px; }
+.flota-node-down .flota-node-name { fill: var(--color-muted-foreground); }
+.flota-node-down .flota-node-disc { stroke-dasharray: 3 3; opacity: 0.9; }
+.flota-node-down .flota-node-disc, .flota-node-down .flota-glyph { opacity: 0.7; }
+
+.flota-node-up .flota-node-disc { stroke: var(--flota-up); stroke-width: 2; fill: color-mix(in srgb, var(--flota-up) 12%, var(--flota-bg));
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--flota-up) 55%, transparent)); }
+.flota-node-up .flota-glyph { stroke: var(--flota-up); }
+.flota-node-up .flota-node-status { fill: color-mix(in srgb, var(--flota-up) 78%, currentColor); }
+
+.flota-node-waking .flota-node-disc { stroke: var(--flota-wake); stroke-width: 2; fill: color-mix(in srgb, var(--flota-wake) 10%, var(--flota-bg)); }
+.flota-node-waking .flota-glyph { stroke: var(--flota-wake); }
+.flota-node-waking .flota-node-status { fill: color-mix(in srgb, var(--flota-wake) 78%, currentColor); }
+.flota-pulse { fill: none; stroke: var(--flota-wake); stroke-width: 2; transform-origin: 0 0; animation: flota-ring-pulse 1.6s ease-out infinite; }
+@keyframes flota-ring-pulse { 0% { opacity: 0.9; transform: scale(1); } 100% { opacity: 0; transform: scale(1.55); } }
+
+.flota-busy-ring { fill: none; stroke: var(--flota-busy); stroke-width: 1.6; stroke-dasharray: 5 5; opacity: 0.85; transform-origin: 0 0; animation: flota-spin 9s linear infinite; }
+.flota-busy-badge circle { fill: var(--flota-busy); stroke: var(--flota-bg); stroke-width: 2.5; }
+.flota-busy-badge text { fill: var(--flota-bg); stroke: none; font-size: 11px; font-weight: 700; }
+.flota-node-busy .flota-node-status { fill: color-mix(in srgb, var(--flota-busy) 78%, currentColor); }
+
+.flota-select-ring { fill: none; stroke: var(--flota-hub); stroke-width: 2; opacity: 0; transition: opacity 0.2s ease; }
+.flota-node-selected .flota-select-ring { opacity: 1; }
+.flota-node-hover .flota-select-ring, .flota-node:focus-visible .flota-select-ring { opacity: 0.55; }
+.flota-node-hover .flota-node-disc { stroke-width: 2.6; }
+.flota-ripple { fill: none; stroke: var(--flota-hub); stroke-width: 2; transform-origin: 0 0; animation: flota-ripple 1.3s ease-out 2 both; }
+@keyframes flota-ripple { 0% { opacity: 0.9; transform: scale(1); } 100% { opacity: 0; transform: scale(2.4); } }
+@keyframes flota-pop { 0% { opacity: 0; transform: scale(0.3); } 100% { opacity: 1; transform: scale(1); } }
+@keyframes flota-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* tooltip */
+.flota-tip { position: absolute; z-index: 5; width: max-content; max-width: 17rem; pointer-events: none; padding: 0.6rem 0.75rem;
+  background: var(--color-popover, var(--flota-bg)); color: inherit;
+  border: 1px solid var(--color-border); border-radius: 0.5rem; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  font-size: 0.78rem; transform: translate(-50%, -100%); animation: flota-fade-in 0.15s ease-out; }
+.flota-tip-below { transform: translate(-50%, 0); }
+.flota-tip-left.flota-tip-above { transform: translate(calc(-100% + 2.5rem), -100%); }
+.flota-tip-left.flota-tip-below { transform: translate(calc(-100% + 2.5rem), 0); }
+.flota-tip-right.flota-tip-above { transform: translate(-2.5rem, -100%); }
+.flota-tip-right.flota-tip-below { transform: translate(-2.5rem, 0); }
+.flota-tip-title { display: flex; align-items: center; gap: 0.45rem; margin-bottom: 0.35rem; }
+.flota-tip-title strong { font-size: 0.85rem; }
+.flota-tip-state { margin-left: auto; padding-left: 0.75rem; color: var(--color-muted-foreground); }
+.flota-tip-desc { margin: 0 0 0.45rem; color: var(--color-muted-foreground); }
+.flota-tip .flota-fields { font-size: 0.75rem; gap: 0.2rem 0.75rem; }
+.flota-tip-hint { margin: 0.45rem 0 0; font-size: 0.7rem; color: var(--color-muted-foreground); opacity: 0.8; }
+
+/* legend */
+.flota-legend { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1.25rem;
+  margin-top: 0.4rem; padding-top: 0.65rem; border-top: 1px solid var(--color-border); font-size: 0.75rem; color: var(--color-muted-foreground); }
+.flota-legend-items { display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; }
+.flota-legend-item { display: inline-flex; align-items: center; gap: 0.45rem; }
+.flota-swatch { width: 0.8rem; height: 0.8rem; border-radius: 50%; border: 2px solid; box-sizing: border-box; flex: none; }
+.flota-swatch-up { border-color: var(--flota-up); background: color-mix(in srgb, var(--flota-up) 30%, transparent); box-shadow: 0 0 0.45rem var(--flota-up); }
+.flota-swatch-down { border-color: var(--flota-down); border-style: dashed; opacity: 0.8; }
+.flota-swatch-waking { border-color: var(--flota-wake); animation: flota-pulse 1.4s ease-in-out infinite; }
+.flota-swatch-busy { border-color: var(--flota-busy); border-style: dotted; width: 0.95rem; height: 0.95rem; animation: flota-spin 6s linear infinite; }
+.flota-updated { display: inline-flex; align-items: center; gap: 0.45rem; font-variant-numeric: tabular-nums; }
+.flota-live { width: 0.45rem; height: 0.45rem; border-radius: 50%; background: var(--flota-up); animation: flota-pulse 2s ease-in-out infinite; }
+
+/* empty state */
+.flota-empty { border-style: dashed; }
+.flota-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); gap: 1rem 1.5rem; }
+.flota-step { display: flex; gap: 0.75rem; align-items: flex-start; font-size: 0.82rem; }
+.flota-step strong { display: block; margin-bottom: 0.25rem; }
+.flota-step p { margin: 0 0 0.4rem; color: var(--color-muted-foreground); }
+.flota-step-n { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 1.6rem; height: 1.6rem; border-radius: 50%;
+  font-size: 0.8rem; font-weight: 700; color: var(--flota-hub); border: 1.5px solid var(--flota-hub); background: color-mix(in srgb, var(--flota-hub) 12%, transparent); }
+.flota-copy { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.4rem 0.4rem 0.65rem; border: 1px solid var(--color-border);
+  border-radius: 0.4rem; background: color-mix(in srgb, currentColor 5%, transparent); }
+.flota-copy code { flex: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .flota-page *, .flota-page *::before, .flota-page *::after { animation: none !important; transition: none !important; }
+  .flota-pulse { opacity: 0.6; transform: scale(1.2); }
+  .flota-card-wrap { scroll-behavior: auto; }
+}

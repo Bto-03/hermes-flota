@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.bak
+*.orig
+*.swp
+.env
+.env.*
+node_modules/
+.venv/
+.DS_Store
