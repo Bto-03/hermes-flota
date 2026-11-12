@@ -6,10 +6,12 @@ Flota is a standalone Hermes plugin with no Python dependencies beyond the stand
 |---|---|---|
 | `register_delegation_provider` | `provider.py` | The `flota` delegation backend: `task_parameters`, `description`, `route_task` |
 | `register_hook("subagent_start" / "subagent_stop")` | `idle.py` | Busy counts and idle timers |
-| `register_tool("flota")` | `tool.py` | Agent tool: `status`, `wake`, `sleep`, `off` (offered while `agent_tool` is on) |
+| `register_tool("flota")` | `tool.py` | Agent tool: `status`, `wake`; `sleep`, `off` only with `agent_power_actions` (offered while `agent_tool` is on) |
+| `register_hook("pre_tool_call")` | `tool.py` | Sends every `flota` tool call with `sleep` / `off` to Hermes' approval prompt |
 | `register_command("flota")` | `slash.py` | `/flota` in chats |
 | `register_cli_command("flota")` | `cli.py` | `hermes flota ...` |
-| `ssh_guard.install()` | `ssh_guard.py` | Turns off SSH file sync for `flota-*` profiles |
+
+Flota never replaces or wraps a Hermes core class or method; it changes core behaviour only through config keys and the hooks above.
 
 The dashboard tab and the Flota page are served by `dashboard/plugin_api.py` (a FastAPI router loaded by Hermes from `dashboard/manifest.json`). It reuses the same modules.
 
@@ -85,11 +87,11 @@ The CLI (`hermes flota sleep|off|status`) and the dashboard run in other process
 
 `home.py` maps every Hermes home to its **owner**. A `<root>/profiles/flota-*` home maps to the profile named in its `flota/owner` file (written at setup), else to the root Hermes home. Every other home owns itself. Config reads and writes, invites, busy state, wake-timer state, cron reads and profile clones all run inside `home.owner_scope()`. That scope sets core's context-local Hermes-home override and never touches environment variables.
 
-## SSH file sync guard
+## SSH file sync
 
-Core's SSH terminal (`tools/environments/ssh.py`, `SSHEnvironment`) mirrors local skills, credentials and caches into `<remote $HOME>/.hermes` when it connects. On cleanup it tars that whole directory back (120 s timeout, three tries). That suits a throwaway box, but a Flota machine is one of your own computers: its `~/.hermes` may be a real Hermes install of many GB. The push would write this host's files, credentials included, into it, and the pull would time out after holding the parent for minutes.
+Core's SSH terminal mirrors local skills, credentials and caches into `<remote $HOME>/.hermes` when it connects. On cleanup it tars that whole directory back (120 s timeout, three tries). That suits a throwaway box, but a Flota machine is one of your own computers: its `~/.hermes` may be a real Hermes install of many GB. The push writes this host's files, credentials included, into it, and the pull can time out after holding the parent for minutes.
 
-`ssh_guard.install()` wraps `SSHEnvironment.__init__` and passes `sync_files=False` when the active Hermes home is a profile Flota runs subagents as, which is how core runs a Flota subagent: a `profiles/flota-*` profile, one marked at setup (`flota/owner`), or the `profile` of any configured machine. Other profiles are untouched. If the core's constructor has no `sync_files` parameter, the guard logs a warning and `doctor` reports `✗ SSH file sync is on`.
+Flota writes `terminal.ssh_sync_files: false` into the config of every machine profile it creates (`setup`, `add-ship` and the Flota page all go through `cli.run_setup`), and `hermes flota doctor --fix` writes it into profiles that already exist (`ssh_sync.py`). That key is proposed in core ([issue #148726](https://github.com/NousResearch/hermes-agent/issues/148726), PRs #148791 and #145271, env var `TERMINAL_SSH_SYNC_FILES`). **Hermes 0.23.1 does not read it yet**, so until a core release does, a Flota subagent still syncs files both ways. `doctor` shows `! SSH file sync is still on` while that is the case; it judges support from the public `hermes_cli.config.DEFAULT_CONFIG`. Flota used to wrap core's SSH terminal constructor to force the sync off; that was removed in 0.2.2, because a catalog plugin must not replace core methods.
 
 ## Modules
 
@@ -105,7 +107,7 @@ Core's SSH terminal (`tools/environments/ssh.py`, `SSHEnvironment`) mirrors loca
 | `pairing.py` | Invite and ship codes, `authorized_keys` add/remove, join checks, host selection |
 | `crew.py`, `remote_crew.py` | Bots on the flagship and on each ship (read-only SSH scan, cached) |
 | `home.py` | Owner scope; hiding plumbing profiles from the Bots roster |
-| `ssh_guard.py` | SSH file sync guard |
+| `ssh_sync.py` | The `terminal.ssh_sync_files` key: write it, read it, detect core support |
 | `cli.py`, `slash.py`, `tool.py` | User surfaces |
 | `dashboard/plugin_api.py` | REST backend for the dashboard tab and the Flota page |
 
@@ -115,3 +117,5 @@ Core's SSH terminal (`tools/environments/ssh.py`, `SSHEnvironment`) mirrors loca
 - Auto-sleep timers live in the running process, so auto-sleep needs a long-lived gateway.
 - Hermes routes the tasks of one `delegate_task` call one after another, so a slow wake delays the later tasks of that batch.
 - Children are matched to machines by goal text. Identical goals sent to different machines in one batch can be swapped.
+- Until core reads `terminal.ssh_sync_files` ([issue #148726](https://github.com/NousResearch/hermes-agent/issues/148726)), a subagent on a Flota machine syncs files over SSH again (see [SSH file sync](#ssh-file-sync)).
+- The agent tool's schema is fixed when the plugin registers: turning `agent_power_actions` on reaches the model in new sessions.

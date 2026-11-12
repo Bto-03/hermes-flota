@@ -1,7 +1,7 @@
 name: flota
 label: Flota
 kind: standalone
-version: 0.2.1
+version: 0.2.2
 author: Francisco Bastidas
 description: >
   Run delegate_task subagents on your own machines over SSH
@@ -14,7 +14,7 @@ description: >
   with `hermes flota doctor`. Python standard library only.
 requires_hermes: ">=0.22.5"
 provides_tools: [flota]
-provides_hooks: [subagent_start, subagent_stop]
+provides_hooks: [subagent_start, subagent_stop, pre_tool_call]
 config_schema:
   auto_sleep:
     type: bool
@@ -40,8 +40,13 @@ config_schema:
   agent_tool:
     type: bool
     label: Agent tool
-    description: Give the agent the flota tool to check, wake, suspend or power off your machines.
+    description: Give the agent the flota tool to check and wake your machines.
     default: true
+  agent_power_actions:
+    type: bool
+    label: Agent power actions
+    description: Also let the agent ask to suspend or power off a machine with the flota tool. Each request asks you for approval first, because whoever is using that machine loses their session. Takes effect in new sessions.
+    default: false
   cache_ttl:
     type: str
     label: Prompt cache lifetime

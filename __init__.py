@@ -29,10 +29,8 @@ def register(ctx) -> None:
         logger.warning("flota needs a Hermes core with pluggable delegation providers "
                        "(agent.delegation_provider); update Hermes. The plugin is inactive until then.")
         return
-    from . import cli, slash, ssh_guard, tool
+    from . import cli, slash, tool
     from .idle import IdleSleeper, state_path
-
-    ssh_guard.install()  # flota-<machine> SSH terminals: no copy of the machine's ~/.hermes
 
     # shortcut: one state file per profile; two processes running subagents at once (gateway and a
     # chat session) overwrite each other's counts, upgrade to one file per pid if that matters.
@@ -40,9 +38,14 @@ def register(ctx) -> None:
     ctx.register_delegation_provider(FlotaDelegationProvider(sleeper=sleeper))
     ctx.register_hook("subagent_start", sleeper.on_start)
     ctx.register_hook("subagent_stop", sleeper.on_stop)
-    ctx.register_tool(name="flota", toolset="flota", schema=tool.SCHEMA,
+    # sleep/off are opt-in (agent_power_actions) and always go through the user's approval; the
+    # schema is fixed at registration, the handler and the hook re-read the panel on every call.
+    power_actions = tool.power_actions_enabled()
+    ctx.register_hook("pre_tool_call", tool.make_approval_hook())
+    ctx.register_tool(name="flota", toolset="flota", schema=tool.schema(power_actions),
                       handler=tool.make_handler(sleeper=sleeper), check_fn=tool.available,
-                      description="Check, wake, sleep or power off your machines", emoji="🖥️")
+                      description=("Check, wake, sleep or power off your machines" if power_actions
+                                   else "Check or wake your machines"), emoji="🖥️")
     ctx.register_command("flota", slash.make_handler(ctx, sleeper=sleeper),
                          description="Show your machines, or dry-run / wake / sleep / power off one",
                          args_hint="[status | dry-run <machine> | wake <machine> | sleep <machine> | off <machine>]")

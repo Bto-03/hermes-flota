@@ -15,6 +15,7 @@ plugins:
         sleep_action: suspend
         allow_power_off: true
         agent_tool: true
+        agent_power_actions: false
         cache_ttl: 5m
         default: desk           # optional
         machines:
@@ -34,7 +35,7 @@ plugins:
 
 Durations accept a number of seconds (`90`) or a string with a unit: `90s`, `10m`, `1h`, `1.5h`.
 
-Panel edits apply without a restart. The provider, `/flota` and the agent tool read the config on every call. An idle timer that is already running keeps the machine definition it started with.
+Panel edits apply without a restart. The provider, `/flota` and the agent tool read the config on every call. An idle timer that is already running keeps the machine definition it started with. One exception: the list of actions the agent tool offers is fixed when a session starts, so turning `agent_power_actions` on shows `sleep` / `off` to the model in new sessions (turning it off refuses them at once).
 
 ## Panel settings
 
@@ -46,7 +47,8 @@ These are the keys in `plugin.yaml`'s `config_schema`, shown in Plugins → Flot
 | `sleep_after` | duration | `10m` | Idle time before auto-sleep, for machines that don't set their own `sleep_after`. Not applied to a machine with `sleep: none` and no `sleep_command`. |
 | `sleep_action` | `suspend` \| `hibernate` \| `poweroff` | `suspend` | What auto-sleep does, for machines that don't set their own `sleep`. |
 | `allow_power_off` | bool | `true` | Master switch for powering off. Only an explicit `false` turns it off. Even when it's on, only machines Flota can wake again (`wol`, `wol_via`, `command`) can be powered off; any other `poweroff` becomes `suspend`. |
-| `agent_tool` | bool | `true` | Offer the agent the `flota` tool (status, wake, sleep, off). |
+| `agent_tool` | bool | `true` | Offer the agent the `flota` tool: `status` and `wake`. |
+| `agent_power_actions` | bool | `false` | Also offer `sleep` and `off` in that tool. Only an explicit `true` turns it on. Even then, every `sleep` / `off` call stops at Hermes' approval prompt, which names the machine and the action and warns that whoever is using it loses their session; "always" covers only that machine and action, and with nobody to answer Hermes refuses. Off: the model isn't offered these actions, and a call anyway is refused with how to turn them on. `/flota`, `hermes flota sleep|off` and the Flota page are yours and don't depend on this. |
 | `cache_ttl` | duration | `5m` | The provider's prompt-cache lifetime. Flota quotes it when it tells the agent to replace a silent subagent instead of reviving it. |
 | `machines` | mapping | `{}` | Your machines by name. See [Per-machine keys](#per-machine-keys). |
 

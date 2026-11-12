@@ -11,6 +11,7 @@ def test_falls_back_to_delegation_config():
     assert out["machines"] == {"pc": {"profile": "pc", "host": "h", "sleep": "none"}}  # no wake: stays on
     assert out["default"] == "pc" and out["cache_ttl"] == "7m"
     assert out["allow_power_off"] is True and out["agent_tool"] is True
+    assert out["agent_power_actions"] is False  # opt-in: the agent cannot ask to sleep/off by default
 
 
 def test_panel_wins_when_set():

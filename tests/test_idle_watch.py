@@ -272,15 +272,37 @@ def test_the_first_delegation_recovers_once(tmp_path):
 def test_register_gives_the_sleeper_the_live_config(monkeypatch):
     import flota_plugin
     import hermes_cli.config as config_mod
-    from flota_plugin import ssh_guard
     panel = {"machines": {"pc": {"profile": "pc", "host": "192.0.2.9", "sleep": "none"}}}
     monkeypatch.setattr(config_mod, "load_config_readonly",
                         lambda: {"plugins": {"entries": {"flota": {"settings": panel}}}})
     assert flota_plugin._machine("pc").sleep == "none" and flota_plugin._machine("ghost") is None
-    monkeypatch.setattr(ssh_guard, "install", lambda: None)
     seen = {}
     ctx = SimpleNamespace(register_delegation_provider=lambda p: seen.update(sleeper=p._sleeper),
                           **{f"register_{k}": lambda *a, **kw: None
                              for k in ("hook", "tool", "command", "cli_command")})
     flota_plugin.register(ctx)
     assert seen["sleeper"]._reload is flota_plugin._machine
+
+
+def _registered(monkeypatch, settings):
+    import flota_plugin
+    import hermes_cli.config as config_mod
+    monkeypatch.setattr(config_mod, "load_config_readonly",
+                        lambda: {"plugins": {"entries": {"flota": {"settings": settings}}}})
+    hooks, tools = {}, {}
+    ctx = SimpleNamespace(register_delegation_provider=lambda p: None,
+                          register_hook=lambda name, fn: hooks.setdefault(name, fn),
+                          register_tool=lambda **kw: tools.update(kw),
+                          register_command=lambda *a, **kw: None, register_cli_command=lambda **kw: None)
+    flota_plugin.register(ctx)
+    return hooks, tools
+
+
+def test_register_offers_sleep_and_off_only_when_the_panel_allows_them(monkeypatch):
+    hooks, tools = _registered(monkeypatch, {})
+    assert set(hooks) == {"subagent_start", "subagent_stop", "pre_tool_call"}
+    assert tools["schema"]["parameters"]["properties"]["action"]["enum"] == ["status", "wake"]
+    hooks, tools = _registered(monkeypatch, {"agent_power_actions": True})
+    assert tools["schema"]["parameters"]["properties"]["action"]["enum"] == ["status", "wake", "sleep", "off"]
+    verdict = hooks["pre_tool_call"](tool_name="flota", args={"action": "off", "machine": "gpu-box"})
+    assert verdict["action"] == "approve" and verdict["rule_key"] == "flota:off:gpu-box"

@@ -24,7 +24,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Callable
 
-from . import crew, detect, idle, pairing, power, slash, ssh_guard, wake
+from . import crew, detect, idle, pairing, power, slash, ssh_sync, wake
 from . import home as _homes
 from . import machines as machines_mod
 from .machines import OS_NAMES, SLEEP_METHODS, WAKE_METHODS, Machine, load_machines, parse_duration
@@ -179,8 +179,8 @@ def _ssh_ok(machine) -> tuple[bool, str]:
     return done.returncode == 0, (lines[-1] if lines else f"exit {done.returncode}")
 
 
-def _file_sync_guarded() -> bool:
-    return ssh_guard.installed()
+def _core_reads_sync_key() -> bool:
+    return ssh_sync.core_reads_key()
 
 
 def _local_networks() -> list:
@@ -299,7 +299,8 @@ def setup_parser(parser) -> None:
     doctor = sub.add_parser("doctor", help="Check each machine and say how to fix what is wrong")
     doctor.add_argument("machine", nargs="?")
     doctor.add_argument("--fix", action="store_true",
-                        help="Also apply safe fixes: hide the flota-* SSH profiles from the Bots roster")
+                        help="Also apply safe fixes: hide the flota-* SSH profiles from the Bots roster and "
+                             "set terminal.ssh_sync_files: false in each machine's profile")
     sub.add_parser("invite", help="Print a code another machine pastes to join this fleet (30 min)")
     join = sub.add_parser("join", help="Join a fleet: trust its flagship's SSH key, print the ship code")
     join.add_argument("code")
@@ -352,6 +353,7 @@ def handle(args) -> int:
         try:
             if getattr(args, "fix", False):
                 _fix_plumbing()
+                _fix_file_sync()
             return _doctor(args.machine)
         except (RuntimeError, OSError) as exc:
             print(f"✗ {exc}", file=sys.stderr)
@@ -600,6 +602,7 @@ def _run_setup(args, say) -> int:
         terminal.update(backend="ssh", ssh_host=entry["host"], ssh_user=args.user, ssh_port=entry["port"])
         if args.key is not None:
             terminal["ssh_key"] = args.key
+        ssh_sync.disable(terminal)  # no copy of the machine's ~/.hermes, once core reads the key
 
     _update_config(profile_dir / "config.yaml", set_terminal)
     _mark_owner(profile_dir, active.parent)
@@ -784,7 +787,7 @@ def _detect(args, name: str, profile: str, entry: dict, say=None) -> bool | None
 # --- doctor ------------------------------------------------------------------------------------
 
 def _fix_plumbing() -> int:
-    """``doctor --fix``: hide every flota-* SSH profile from the Desktop Bots roster."""
+    """``doctor --fix`` (1/2): hide every flota-* SSH profile from the Desktop Bots roster."""
     changed = 0
     for name, profile_dir in _plumbing_profiles():
         if _hide_plumbing(profile_dir, name[len(_homes.PROFILE_PREFIX):]):
@@ -792,6 +795,29 @@ def _fix_plumbing() -> int:
             print(f"✓ {name}: hidden from the Bots roster (it is Flota's SSH terminal, not a bot)")
         else:
             print(f"✓ {name}: already hidden from the Bots roster")
+    return changed
+
+
+def _fix_file_sync() -> int:
+    """``doctor --fix`` (2/2): write ``terminal.ssh_sync_files: false`` into every configured machine's
+    existing profile (profiles made before Flota wrote it at setup)."""
+    config = _read_config(_active_config_path())
+    loaded, _ = load_machines(effective(config.get("delegation"), plugin_settings_from_config(config)))
+    changed = 0
+
+    def turn_off(data: dict) -> None:
+        ssh_sync.disable(_child(data, "terminal"))
+
+    for profile in sorted({m.profile for m in loaded.values()}):
+        if not _profile_exists(profile):
+            continue  # doctor reports it; setup creates it with the key
+        path = _profile_dir(profile) / "config.yaml"
+        if ssh_sync.disabled(_read_config(path)):
+            print(f"✓ {profile}: terminal.{ssh_sync.KEY} is already false")
+            continue
+        _update_config(path, turn_off)
+        changed += 1
+        print(f"✓ {profile}: set terminal.{ssh_sync.KEY}: false (takes effect once Hermes reads it)")
     return changed
 
 
@@ -842,22 +868,32 @@ def _checks(m, os_name: str) -> list[tuple[str, str, list[str]]]:
             port = f" -p {m.port}" if m.port != 22 else ""
             out.append(("✗", f"SSH: port open but login failed: {error}", [f"ssh-copy-id{port} {_target(m)}"]))
 
+    sync_key_set = False
     if not _profile_exists(m.profile):
         out.append(("✗", f"profile {m.profile} is missing", [setup]))
     else:
-        terminal = _read_config(_profile_dir(m.profile) / "config.yaml").get("terminal") or {}
+        profile_config = _read_config(_profile_dir(m.profile) / "config.yaml")
+        terminal = profile_config.get("terminal") or {}
         backend, host = terminal.get("backend"), terminal.get("ssh_host")
         if backend == "ssh" and host == m.host:
             out.append(("✓", f"profile {m.profile} → ssh {_target(m)}", []))
         else:
             out.append(("✗", f"profile {m.profile} terminal is {backend or 'local'} {host or ''}".rstrip()
                         + f", not ssh {m.host}", [setup]))
-    if _file_sync_guarded():
-        out.append(("✓", "SSH file sync off for flota profiles (the machine's ~/.hermes is never copied)", []))
-    else:
-        out.append(("✗", "SSH file sync is on: after each subagent Hermes tars the machine's whole ~/.hermes "
-                    "back (timeouts, GBs of RAM and disk)",
-                    ["update Hermes and Flota; this core's SSHEnvironment has no sync_files parameter"]))
+        sync_key_set = ssh_sync.disabled(profile_config)
+        if not sync_key_set:
+            out.append(("✗", f"profile {m.profile} does not set terminal.{ssh_sync.KEY}: false",
+                        ["`hermes flota doctor --fix` writes it"]))
+    if not _core_reads_sync_key():
+        # "!" warns without failing: nothing the user can fix here except a newer core.
+        out.append(("!", f"SSH file sync is still on: this Hermes does not read terminal.{ssh_sync.KEY} yet, "
+                    "so each subagent copies this host's ~/.hermes to the machine and, when it ends, tars "
+                    "the machine's whole ~/.hermes back (slow, can time out)",
+                    [f"fixed by a Hermes version that includes terminal.{ssh_sync.KEY} ({ssh_sync.ISSUE}); "
+                     "Flota already sets the key in the machine's profile"]))
+    elif sync_key_set:
+        out.append(("✓", f"SSH file sync off (terminal.{ssh_sync.KEY}: false; the machine's ~/.hermes is "
+                    "not copied)", []))
 
     if m.wake == "none":
         out.append(("✗", "no wake method", [f"while it is on, run `{setup}` to detect the MAC"]))

@@ -122,6 +122,7 @@ def test_round_trip_invite_join_add_ship(env):
                               "StrictHostKeyChecking=accept-new"]
     assert any("✓ carol@203.0.113.2 (Tailscale)" in line for line in result["lines"])
     assert env.configs[PROFILES / "flota-torre" / "config.yaml"]["terminal"]["ssh_host"] == "203.0.113.2"
+    assert env.configs[PROFILES / "flota-torre" / "config.yaml"]["terminal"]["ssh_sync_files"] is False
     # nonce is spent: the same ship code is refused
     with pytest.raises(pairing.PairingError, match="already used"):
         cli.run_add_ship(joined["ship_code"])

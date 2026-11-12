@@ -2,6 +2,23 @@
 
 All notable changes to Flota. Versions follow `plugin.yaml`.
 
+## 0.2.2 — 2026-11-11
+
+Changes asked for in the catalog review ([PR #153549](https://github.com/NousResearch/hermes-agent/pull/153549)).
+
+### Changed
+
+- **No more core patching.** Flota no longer wraps core's SSH terminal constructor to turn off SSH file sync. It writes `terminal.ssh_sync_files: false` into every machine profile it creates (`setup`, `add-ship`, the Flota page), and `hermes flota doctor --fix` writes it into existing ones. **Hermes 0.23.1 does not read that key yet** ([issue #148726](https://github.com/NousResearch/hermes-agent/issues/148726), PRs #148791 / #145271), so until a core release does, subagents on a Flota machine sync files again: slow on a machine with its own Hermes install. See [troubleshooting.md](docs/troubleshooting.md#subagents-on-a-flota-machine-are-slow-to-finish).
+- `doctor`: `✗ profile ... does not set terminal.ssh_sync_files: false` (fixed by `--fix`), and a `!` warning, which doesn't fail the run, while the core still syncs. The old `✗ SSH file sync is on` line is gone.
+- **The agent tool offers only `status` and `wake` by default.** New panel option `agent_power_actions` (default `false`) adds `sleep` and `off`; while it is off, the handler refuses them and says how to turn them on.
+- **Every agent `sleep` / `off` asks you first.** A `pre_tool_call` hook sends those calls to Hermes' approval prompt, naming the machine and the action and warning that whoever uses it loses their session. "Always" covers one machine and action. With nobody to answer, Hermes refuses. `/flota`, `hermes flota sleep|off` and the Flota page are unchanged.
+- README: the pairing key is created without a passphrase, and a ship authorises it with no restrictions.
+- The `plugin-catalog/` directory left the repository; the catalog entry lives in the catalog PR.
+
+### Removed
+
+- `ssh_guard.py` (replaced by `ssh_sync.py`, which only reads and writes config).
+
 ## 0.2.1 — 2026-11-11
 
 ### Added

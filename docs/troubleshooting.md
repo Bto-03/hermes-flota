@@ -18,7 +18,8 @@ hermes flota doctor          # every machine; add a name for one
 | `✗ SSH: host:22 is not answering` | Off, asleep, wrong address, or a firewall | `hermes flota wake x`; check the address |
 | `✗ SSH: port open but login failed: Permission denied ...` | The key isn't authorised, or the user is wrong | `ssh-copy-id user@host`, or pair again |
 | `✗ profile flota-x is missing` / `terminal is local ..., not ssh host` | The profile was deleted or edited by hand | Run `hermes flota setup x --host ... --user ...` again (`doctor` prints the exact line) |
-| `✗ SSH file sync is on` | This Hermes core's `SSHEnvironment` has no `sync_files` parameter, so subagents would copy the machine's `~/.hermes` back after each run | Update Hermes and Flota |
+| `✗ profile flota-x does not set terminal.ssh_sync_files: false` | The profile was made before Flota 0.2.2, or edited by hand | `hermes flota doctor --fix` writes the key |
+| `! SSH file sync is still on: this Hermes does not read terminal.ssh_sync_files yet` | A warning, not a failure: each subagent copies this host's `~/.hermes` files to the machine and tars the machine's `~/.hermes` back when it ends (slow, can time out) | Nothing to do in Flota: it already set the key. A Hermes release that includes `terminal.ssh_sync_files` ([issue #148726](https://github.com/NousResearch/hermes-agent/issues/148726)) fixes it; see [below](#subagents-on-a-flota-machine-are-slow-to-finish) |
 | `✗ no wake method` | `wake: none` | Run `setup` again while the machine is on, to detect its MAC |
 | `✗ Wake-on-LAN disabled on enp3s0` | The NIC has WoL off | Run the printed commands as root (`ethtool -s <iface> wol g`, then make it persistent with `nmcli ... wake-on-lan magic`), and enable WoL in the BIOS/UEFI |
 | `✗ Wake-on-LAN: the LAN MAC is ..., the config has ...` | The NIC changed, or the wrong MAC was saved | Run `setup` again |
@@ -66,6 +67,14 @@ hermes flota doctor          # every machine; add a name for one
 
 **`/flota sleep desk` answers "busy with N subagent(s), not put to sleep".** By design. If you're sure, type `/flota sleep desk force`. The agent can't do this for you: its tool has no force option.
 
+**The agent says it may not suspend or power off machines.** That is the default. Turn on "Agent power actions" (`agent_power_actions: true`) in Plugins → Flota and start a new session (the tool's list of actions is fixed when a session starts). Each request then shows Hermes' approval prompt naming the machine and the action. With no one to answer it (a cron job, a one-shot `hermes chat -q` without approvals), Hermes refuses the call. You can always do it yourself with `hermes flota sleep|off <machine>`, `/flota` or the Flota page.
+
 **Not sure what to do next?** Run `hermes flota` with no arguments: it prints where this Hermes stands and the one command to run next.
 
-**Subagents were slow to finish and the machine's disk filled up.** That's SSH file sync: `doctor` shows `✗ SSH file sync is on`. Update Hermes and Flota so the guard can install.
+### Subagents on a Flota machine are slow to finish
+
+That's Hermes' SSH file sync. When a subagent connects, core's SSH terminal copies this host's skills, caches and declared credential files into the machine's `~/.hermes`; when it ends, it tars the machine's whole `~/.hermes` back (120 s timeout, three tries). On a machine that has its own Hermes install that can be many GB, so the subagent's end is slow or times out.
+
+Flota 0.2.1 and earlier turned this off by wrapping core's SSH terminal class. A catalog plugin may not patch core, so 0.2.2 removed that and writes `terminal.ssh_sync_files: false` into each machine's profile instead. **Hermes 0.23.1 does not read that key yet**, so until a core release does, every subagent on a Flota machine syncs again, and `doctor` shows `! SSH file sync is still on`. The key is tracked in [issue #148726](https://github.com/NousResearch/hermes-agent/issues/148726) (PRs #148791 and #145271 add it, with `TERMINAL_SSH_SYNC_FILES` as the env var).
+
+Until then: keep the machine's own `~/.hermes` small, or run Flota subagents as a ship user that has no Hermes install. Make sure every machine profile has the key (`hermes flota doctor --fix`), so it takes effect as soon as you update Hermes.

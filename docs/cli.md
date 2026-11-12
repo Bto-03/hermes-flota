@@ -90,7 +90,8 @@ Checks every machine (or one) and prints a `→` fix under each failed line:
 desk  alice@192.0.2.20:22
   ✓ SSH reachable
   ✓ profile flota-desk → ssh alice@192.0.2.20
-  ✓ SSH file sync off for flota profiles (the machine's ~/.hermes is never copied)
+  ! SSH file sync is still on: this Hermes does not read terminal.ssh_sync_files yet, so each subagent copies this host's ~/.hermes to the machine and, when it ends, tars the machine's whole ~/.hermes back (slow, can time out)
+      → fixed by a Hermes version that includes terminal.ssh_sync_files (https://github.com/NousResearch/hermes-agent/issues/148726); Flota already sets the key in the machine's profile
   ✓ wake: wol (mac aa:bb:cc:dd:ee:ff, broadcast 192.0.2.255)
   ✓ Wake-on-LAN enabled on enp3s0
   ? power off: waking from power-off (S5) needs Wake-on-LAN from S5 enabled in the BIOS (...)
@@ -98,9 +99,9 @@ desk  alice@192.0.2.20:22
   ✓ this host is on the machine's LAN (192.0.2.0/24)
 ```
 
-`✓` passed, `✗` failed, `?` couldn't be checked. Config problems (skipped machines, values replaced by defaults) are listed first. Every line is explained in [troubleshooting.md](troubleshooting.md).
+`✓` passed, `✗` failed, `?` couldn't be checked, `!` a warning that doesn't fail the run (here: Hermes 0.23.1 still syncs files over SSH; with a core that reads `terminal.ssh_sync_files` the line becomes `✓ SSH file sync off`). Config problems (skipped machines, values replaced by defaults) are listed first. Every line is explained in [troubleshooting.md](troubleshooting.md).
 
-`--fix` first applies the safe fixes: it hides every `flota-*` profile from the Desktop Bots roster.
+`--fix` first applies the safe fixes: it hides every `flota-*` profile from the Desktop Bots roster, and writes `terminal.ssh_sync_files: false` into each configured machine's profile that lacks it.
 
 Exit: 0 when everything passed; 1 when something failed or no machines are configured; 2 for an unknown machine name.
 

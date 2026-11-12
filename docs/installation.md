@@ -81,7 +81,7 @@ hermes plugins update flota
 hermes gateway restart
 ```
 
-After an update, restart the gateway so it picks up the new provider, hooks and SSH file-sync guard.
+After an update, restart the gateway so it picks up the new provider and hooks. Coming from 0.2.1 or earlier, run `hermes flota doctor --fix` once: it writes `terminal.ssh_sync_files: false` into the machine profiles made before 0.2.2 (see [troubleshooting.md](troubleshooting.md#subagents-on-a-flota-machine-are-slow-to-finish)).
 
 ## Uninstalling
 

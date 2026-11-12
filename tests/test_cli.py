@@ -108,7 +108,7 @@ def test_setup_creates_the_profile_and_writes_both_configs(store, capsys):
     assert store.log == [("create", "flota-torre"), ("write", profile_config), ("write", ACTIVE)]
     assert store[profile_config]["terminal"] == {
         "backend": "ssh", "ssh_host": "10.0.0.5", "ssh_user": "carol", "ssh_port": 2222,
-        "ssh_key": "~/.ssh/id_torre"}
+        "ssh_key": "~/.ssh/id_torre", "ssh_sync_files": False}
     assert store[profile_config]["model"] == START["model"]
     assert machines(store[ACTIVE])["torre"] == {
         "profile": "flota-torre", "host": "10.0.0.5", "user": "carol", "key": "~/.ssh/id_torre", "port": 2222,
@@ -324,7 +324,7 @@ def test_setup_minimal_on_an_empty_config(store):
     assert store[ACTIVE] == {"plugins": {"entries": {"flota": {"settings": {"machines": {
         "nas": {"profile": "flota-nas", "host": "nas.lan", "user": "admin", "port": 22, "wake": "none"}}}}}}}
     assert store[PROFILES / "flota-nas" / "config.yaml"]["terminal"] == {
-        "backend": "ssh", "ssh_host": "nas.lan", "ssh_user": "admin", "ssh_port": 22}
+        "backend": "ssh", "ssh_host": "nas.lan", "ssh_user": "admin", "ssh_port": 22, "ssh_sync_files": False}
 
 
 def test_setup_again_updates_and_keeps_hand_written_keys(store):
@@ -393,9 +393,9 @@ def test_setup_with_real_core(tmp_path, monkeypatch, capsys):
     assert main(*SETUP) == 0
     profile_config = home / "profiles" / "flota-torre" / "config.yaml"
     terminal = read(profile_config)["terminal"]
-    assert {k: terminal[k] for k in ("backend", "ssh_host", "ssh_user", "ssh_port", "ssh_key")} == {
+    assert {k: terminal[k] for k in ("backend", "ssh_host", "ssh_user", "ssh_port", "ssh_key", "ssh_sync_files")} == {
         "backend": "ssh", "ssh_host": "10.0.0.5", "ssh_user": "carol", "ssh_port": 2222,
-        "ssh_key": "~/.ssh/id_torre"}
+        "ssh_key": "~/.ssh/id_torre", "ssh_sync_files": False}
     assert read(profile_config)["model"] == {"default": "some/model", "provider": "openrouter"}
     active = read(home / "config.yaml")
     assert machines(active) == {
@@ -528,21 +528,57 @@ def doctor(reachable, monkeypatch):
     monkeypatch.setattr(cli, "_ssh_ok", lambda machine: reachable.ssh)
     monkeypatch.setattr(cli, "_local_networks",
                         lambda: [ipaddress.ip_interface(n) for n in reachable.lan])
-    monkeypatch.setattr(cli, "_file_sync_guarded", lambda: True)
+    monkeypatch.setattr(cli, "_core_reads_sync_key", lambda: True)
     return reachable
 
 
 def test_doctor_says_file_sync_is_off(doctor, capsys):
     code, out = run_doctor(capsys, "studio")
-    assert code == 0 and "file sync off" in out
+    assert code == 0 and "✓ SSH file sync off (terminal.ssh_sync_files: false" in out
 
 
-def test_doctor_fails_when_the_ssh_file_sync_guard_is_missing(doctor, monkeypatch, capsys):
-    # Without the guard core tars the machine's whole ~/.hermes back after every subagent.
-    monkeypatch.setattr(cli, "_file_sync_guarded", lambda: False)
+def test_doctor_warns_while_core_does_not_read_the_sync_key(doctor, monkeypatch, capsys):
+    # The key is set, but a core without terminal.ssh_sync_files still syncs: say so, without failing.
+    monkeypatch.setattr(cli, "_core_reads_sync_key", lambda: False)
+    code, out = run_doctor(capsys, "studio")
+    assert code == 0 and "✗" not in out and "file sync off" not in out
+    assert "! SSH file sync is still on" in out and "~/.hermes" in out and "slow" in out
+    assert "terminal.ssh_sync_files" in out and "issues/148726" in out
+
+
+def test_doctor_fails_when_a_profile_lacks_the_sync_key_and_fix_writes_it(doctor, monkeypatch, capsys):
+    profile_config = PROFILES / "flota-studio" / "config.yaml"
+    del doctor[profile_config]["terminal"]["ssh_sync_files"]  # a profile made by Flota 0.2.1
     code, out = run_doctor(capsys, "studio")
     assert code == 1
-    assert "✗ SSH file sync" in out and "~/.hermes" in out
+    assert "✗ profile flota-studio does not set terminal.ssh_sync_files: false" in out
+    assert "hermes flota doctor --fix" in out
+    monkeypatch.setattr(cli, "_plumbing_profiles", lambda: [])
+    capsys.readouterr()
+    assert main("doctor", "--fix", "studio") == 0
+    out = capsys.readouterr().out
+    assert "✓ flota-studio: set terminal.ssh_sync_files: false" in out
+    assert doctor[profile_config]["terminal"]["ssh_sync_files"] is False
+    assert doctor[profile_config]["terminal"]["backend"] == "ssh"  # the rest of the block is kept
+    capsys.readouterr()
+    assert main("doctor", "--fix", "studio") == 0
+    assert "✓ flota-studio: terminal.ssh_sync_files is already false" in capsys.readouterr().out
+
+
+def test_doctor_fix_skips_a_missing_profile(doctor, monkeypatch, capsys):
+    del doctor[PROFILES / "flota-studio" / "config.yaml"]
+    monkeypatch.setattr(cli, "_plumbing_profiles", lambda: [])
+    writes = len(doctor.log)
+    assert cli._fix_file_sync() == 0 and len(doctor.log) == writes
+
+
+def test_setup_keeps_a_hand_set_sync_key_and_run_setup_writes_it(store):
+    # run_setup is the one path behind setup, add-ship and the Flota page: all three get the key.
+    store[PROFILES / "flota-nas" / "config.yaml"] = {"terminal": {"backend": "local", "ssh_sync_files": False}}
+    assert main("setup", "nas", "--host", "nas.lan", "--user", "admin") == 0
+    assert store[PROFILES / "flota-nas" / "config.yaml"]["terminal"]["ssh_sync_files"] is False
+    code, _ = cli.run_setup(argparse.Namespace(name="desk", host="192.0.2.40", user="alice"))
+    assert code == 0 and store[PROFILES / "flota-desk" / "config.yaml"]["terminal"]["ssh_sync_files"] is False
 
 
 def run_doctor(capsys, *names):

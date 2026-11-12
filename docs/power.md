@@ -4,7 +4,7 @@ Flota puts a machine to sleep in three situations:
 
 - **Auto-sleep**, after `sleep_after` with no subagents on the machine. The idle timer starts after its last subagent, and also when a machine is awake with no subagent on it: woken by `/flota wake`, the agent tool or its wake timer, or left marked busy by a gateway that restarted (picked up on the first delegation of the new process). It never fires while the machine is busy. A failed auto-sleep is retried once, 60 s later.
 - A machine with `wake: none` (and no `wake_timer`) gets `sleep: none` by default: Flota never auto-sleeps what it couldn't turn on again. Set `sleep` explicitly to change that.
-- **On request**: `/flota sleep`, `hermes flota sleep`, the agent tool, or the Sleep button on the dashboard or Flota page.
+- **On request**: `/flota sleep`, `hermes flota sleep`, or the Sleep button on the dashboard or Flota page. The agent tool can ask too, only with `agent_power_actions` on, and each request waits for your approval in Hermes' prompt ([configuration.md](configuration.md#panel-settings)).
 - **Power off on request**: `off` from any of the same places.
 
 Every power command goes over SSH (`ssh -o BatchMode=yes -o ConnectTimeout=10 [-i key] user@host <command>`) with a 30 s timeout. The one exception is a machine with a `sleep_command`: for its default action, that command runs on the Hermes host instead. A dropped SSH connection (`closed by remote host`) counts as success, since that's what a suspending machine does.
@@ -31,7 +31,7 @@ The running Hermes process (normally the gateway) counts, per machine:
 
 **Auto-sleep** fires only when all three counts are zero. A new task cancels a pending timer.
 
-**The agent tool** always refuses a busy machine; it has no force option, so neither the model nor text injected into it can stop a working machine. **`/flota sleep|off <machine>`** (same process) refuses too, answering `<name>: busy with N subagent(s), not put to sleep`; a person can type `/flota sleep <machine> force` (or `off ... force`) to do it anyway.
+**The agent tool** offers `sleep` / `off` only with `agent_power_actions` on, asks for your approval on each call, and even then always refuses a busy machine; it has no force option, so neither the model nor text injected into it can stop a working machine. **`/flota sleep|off <machine>`** (same process) refuses too, answering `<name>: busy with N subagent(s), not put to sleep`; a person can type `/flota sleep <machine> force` (or `off ... force`) to do it anyway.
 
 **`hermes flota sleep|off`, the dashboard and the Flota page** run in other processes, so they read the counts from `<hermes home>/flota/state.json`. The file is ignored if the process that wrote it is gone or it's older than a day. They refuse a busy machine unless you force it: `--force` on the CLI, or a confirmation in the UI. With no live gateway they can't know, so they don't refuse.
 

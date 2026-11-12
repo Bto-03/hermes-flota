@@ -7,7 +7,7 @@ Flota gives the Hermes host (the flagship) SSH access to your other machines and
 | Party | Trusted to | Not trusted to |
 |---|---|---|
 | The flagship's user and Hermes process | Run subagents on every ship, as the ship user that authorised the key. **A subagent on a ship has a normal shell there.** That's the point of Flota, so authorise only machines and users you want agents to work on. | — |
-| The model / agent (and any text injected into its context) | Pick a machine for a task; `status`, `wake`, `sleep`, `off` through the `flota` tool. | Stop a busy machine: the tool has **no force option**, and a busy machine is always refused (`... so it was left on. Only the user can stop it anyway: ...`). Power off a machine Flota can't wake again, or while `allow_power_off` is off. Change any setting. |
+| The model / agent (and any text injected into its context) | Pick a machine for a task; `status` and `wake` through the `flota` tool. **Ask** to `sleep` or `off` a machine, only if you turned on `agent_power_actions`; every such call stops at Hermes' approval prompt, which names the machine and the action (an "always" answer covers that one machine and action). | Suspend or power off anything without your approval, or at all while `agent_power_actions` is off (the default). Stop a busy machine: the tool has **no force option**, and a busy machine is always refused (`... so it was left on. Only the user can stop it anyway: ...`). Power off a machine Flota can't wake again, or while `allow_power_off` is off. Change any setting. |
 | You, typing | Force a busy machine down: `--force` on the CLI, `force` in `/flota sleep <machine> force` (or `off`), or the confirmation on the Flota page. | — |
 | A pasted pairing code | Carry a public key (invite) or self-reported addresses, MAC, OS and bot names (ship code). | Re-point a machine already in the fleet: if a ship code matches an existing machine (same MAC or address) but logs in on an address or user that machine doesn't have, `add-ship` refuses (`Nothing was changed.`) unless you pass `--replace` (CLI) or press "This machine really moved - replace it" (page). Add an unintended host: the flagship must log in to it with its own key first. |
 | A ship | Answer about its own facts. | Anything else: crew data it returns (bot names, avatars, gateway state) is size-bounded, pattern-checked and sanitised (`crew.clean_crew`) before it reaches the page; probe output is parsed defensively. |
@@ -41,10 +41,14 @@ Flota gives the Hermes host (the flagship) SSH access to your other machines and
 - **No private keys, passwords or tokens in pairing codes.** An invite carries the flagship's *public* key; a ship code carries no key at all. Codes are base64url JSON. Every field is validated against a strict pattern, values starting with `-` are rejected (so ssh can't read them as options), and a public key with a newline or `PRIVATE KEY` is refused.
 - **No interactive sudo, no password prompts.** Flota prints the root steps it needs for you to run: a polkit rule, enabling Wake-on-LAN, wake-timer permission. The only privileged command it ever runs is `sudo -n` for exactly `rtcwake -m no -s N` (Linux) or `/usr/bin/pmset relative wake N` (macOS), and only after `sudo -n -l` confirms that you installed a rule for that exact command.
 - **No shell keys from the browser.** The dashboard API refuses `wake_command`, `sleep_command`, `power_prefix`, `command` and `profile`, and keeps their existing values on update.
-- **No machine stopped by the model.** The agent tool can't force a busy machine; only a person can (CLI, `/flota ... force`, the page).
-- **No copy of your credentials onto ships.** The SSH file sync guard stops core's SSH terminal from mirroring this host's `~/.hermes` (credentials included) into a ship, and from tarring the ship's `~/.hermes` back. It covers every profile Flota runs subagents as: `flota-*`, a profile marked at setup, or any configured machine's `profile`. See [architecture.md](architecture.md#ssh-file-sync-guard).
+- **No machine stopped by the model without you.** By default the agent tool can't suspend or power off at all. With `agent_power_actions` on, each request goes to Hermes' approval prompt first (a `pre_tool_call` hook; with nobody there to answer, Hermes refuses it). It can never force a busy machine; only a person can (CLI, `/flota ... force`, the page).
+- **No core patching.** Flota doesn't replace or wrap any Hermes core class or method.
 - **No power-off without a way back.** Only machines Flota can wake again can be powered off.
 - **No network services.** Flota opens no listening sockets. Its REST endpoints live inside Hermes' own dashboard/desktop backend and use its authentication.
+
+## What Hermes' SSH terminal still does (until core reads `terminal.ssh_sync_files`)
+
+Core's SSH terminal copies this host's skills, caches and the credential files your skills or config declare into the ship's `~/.hermes` when a subagent connects, and tars the ship's `~/.hermes` back when it ends. Flota sets `terminal.ssh_sync_files: false` in each machine's profile to turn that off, but **Hermes 0.23.1 does not read that key yet** ([issue #148726](https://github.com/NousResearch/hermes-agent/issues/148726)), so for now the copy happens. `hermes flota doctor` says so (`! SSH file sync is still on`). If that matters to you, authorise only ships and ship users you would trust with those files. See [architecture.md](architecture.md#ssh-file-sync).
 
 ## Pairing threats
 
@@ -77,7 +81,7 @@ The REST endpoints live inside Hermes' own dashboard/desktop backend and use its
 | File | Where | Mode |
 |---|---|---|
 | Flota panel (`plugins.entries.flota.settings`) | the active profile's `config.yaml` | unchanged (core's atomic config write) |
-| `flota-<machine>` profiles, and `flota/owner` inside each | `<hermes root>/profiles/` | core's defaults |
+| `flota-<machine>` profiles (their `terminal` block: SSH target and `ssh_sync_files: false`), and `flota/owner` inside each | `<hermes root>/profiles/` | core's defaults |
 | `invites.json` (invite nonces) | `<hermes home>/flota/` | **600** |
 | `state.json` (busy counts), `waketimers.json` | `<hermes home>/flota/` | process umask (no secrets: machine names and counts) |
 | One public key line, comment `flota-flagship:NAME` | the ship's `authorized_keys` (SSH folder) | file 600, `~/.ssh` 700 |
@@ -88,7 +92,7 @@ Flota writes nothing as root. `hermes flota uninstall` lists and removes what it
 
 ## Install scan
 
-Hermes scans plugins on `hermes plugins install` and `hermes plugins validate`. Real output of `hermes plugins validate` for this repository (Hermes v0.23.1, release 0.2.1; line numbers may move):
+Hermes scans plugins on `hermes plugins install` and `hermes plugins validate`. Real output of `hermes plugins validate` for this repository (Hermes v0.23.1, release 0.2.2; line numbers may move):
 
 ```text
 ✓ security scan — safe
@@ -96,13 +100,13 @@ Hermes scans plugins on `hermes plugins install` and `hermes plugins validate`. 
 ✓ desktop surface — stays inside the plugin SDK surface
 ⚠ private core imports (catalog rule 9: public surfaces only; these can break on
 any release): cli.py:71 hermes_cli.profiles.profile_exists; crew.py:80
-hermes_yaml; dashboard/plugin_api.py:422 cron.jobs; home.py:81
-utils.atomic_yaml_write; ssh_guard.py:55 tools.environments.ssh.SSHEnvironment;
-cli.py:76 hermes_cli.profiles.get_profile_dir; cli.py:118
-hermes_cli.profiles.create_profile; cli.py:134
+hermes_yaml; dashboard/plugin_api.py:422 cron.jobs; home.py:82
+utils.atomic_yaml_write; cli.py:76 hermes_cli.profiles.get_profile_dir;
+cli.py:127 hermes_cli.profiles.create_profile; cli.py:144
 hermes_cli.profiles.delete_profile; crew.py:255 hermes_cli.profiles;
-dashboard/plugin_api.py:250 hermes_yaml; and 4 more. Use ctx.* / documented
-plugin APIs, or open an issue for the seam you need.
+dashboard/plugin_api.py:250 hermes_yaml; dashboard/plugin_api.py:253
+hermes_cli.profiles; and 3 more. Use ctx.* / documented plugin APIs, or open an
+issue for the seam you need.
 ...
 Validation passed.
 ```
@@ -110,7 +114,7 @@ Validation passed.
 (The other checks, schema, loadable, declared tools/hooks and so on, all pass with `✓`.) The scan verdict is `safe`; it still records medium-level notes for what Flota really does with SSH keys:
 
 - **SSH folder access.** `join` looks for this machine's own public keys (`id_ed25519.pub`, `flota_ed25519.pub`) to refuse joining a fleet with its own key, and `uninstall` prints which key files it leaves for you. Pairing itself adds and removes one `authorized_keys` line and may create an SSH key (`pairing.py`: `authorize`, `deauthorize`, `flota_key`), as described on this page.
-- **Private core imports (the one warning).** `hermes_cli.profiles` (create/find/delete profiles), `cron.jobs` (read the schedule), `utils.atomic_yaml_write` / `hermes_yaml` (config writes), `tools.environments.ssh.SSHEnvironment` (the file-sync guard). These are not public plugin API and may break on a core release; `doctor` reports a guard that could not install.
+- **Private core imports (the one warning).** `hermes_cli.profiles` (create/find/delete profiles), `cron.jobs` (read the schedule), `utils.atomic_yaml_write` / `hermes_yaml` (config writes). These are not public plugin API and may break on a core release. Flota no longer imports core's SSH terminal class: since 0.2.2 it only reads the public `hermes_cli.config.DEFAULT_CONFIG` to tell whether core knows `terminal.ssh_sync_files`.
 
 Other behaviour a scanner may care about, all disclosed above: `sudo -n` with one fixed command for the wake alarm (`waketimer.py`), and `subprocess` calls to `ssh` and your configured wake/sleep commands.
 

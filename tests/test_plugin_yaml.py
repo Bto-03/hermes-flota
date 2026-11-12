@@ -10,8 +10,10 @@ SCHEMA = MANIFEST["config_schema"]
 
 def test_manifest_declares_the_tool_and_version():
     assert MANIFEST["provides_tools"] == ["flota"]
-    assert MANIFEST["version"] == "0.2.1"
-    assert MANIFEST["provides_hooks"] == ["subagent_start", "subagent_stop"]
+    assert MANIFEST["version"] == "0.2.2"
+    assert MANIFEST["provides_hooks"] == ["subagent_start", "subagent_stop", "pre_tool_call"]
+    # pre_tool_call "approve" (with rule_key) exists since core 0.18.1, below this floor.
+    assert MANIFEST["requires_hermes"] == ">=0.22.5"
 
 
 def test_config_schema_passes_core_validation():
@@ -27,6 +29,7 @@ def test_panel_fields_in_order_with_types_and_defaults():
         ("sleep_action", "enum", "suspend"),
         ("allow_power_off", "boolean", True),
         ("agent_tool", "boolean", True),
+        ("agent_power_actions", "boolean", False),
         ("cache_ttl", "string", "5m"),
         ("machines", "json", {}),
     ]

@@ -72,4 +72,6 @@ def effective(delegation_cfg: Mapping | None, plugin_settings: Mapping | None) -
                 entry["sleep"] = "suspend"
         machines[name] = entry
     return {"machines": machines, "default": pick("default"), "cache_ttl": pick("cache_ttl"),
-            "allow_power_off": allow_off, "agent_tool": panel.get("agent_tool", True) is not False}
+            "allow_power_off": allow_off, "agent_tool": panel.get("agent_tool", True) is not False,
+            # Opt-in: only an explicit True lets the agent ask to suspend or power off a machine.
+            "agent_power_actions": panel.get("agent_power_actions") is True}

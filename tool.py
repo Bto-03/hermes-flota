@@ -1,4 +1,11 @@
-"""The ``flota`` agent tool: see which of the user's machines are on, wake one, or put it to sleep/off."""
+"""The ``flota`` agent tool: see which of the user's machines are on, wake one, or put it to sleep/off.
+
+By default the tool only offers ``status`` and ``wake``. ``sleep`` and ``off`` stop a real computer
+that a person may be using, so they are opt-in (the panel's ``agent_power_actions``) and, even then,
+every call goes through Hermes' human-approval gate: the hook from ``make_approval_hook`` is a
+``pre_tool_call`` hook that returns ``{"action": "approve", ...}`` for them, with one ``rule_key`` per
+machine and action.
+"""
 import json
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -6,28 +13,51 @@ from concurrent.futures import ThreadPoolExecutor
 from . import settings as settings_mod
 from .machines import load_machines
 
-ACTIONS = ("status", "wake", "sleep", "off")
+TOOL_NAME = "flota"
+SAFE_ACTIONS = ("status", "wake")
+POWER_ACTIONS = ("sleep", "off")
+ACTIONS = SAFE_ACTIONS + POWER_ACTIONS
+POWER_ACTIONS_OFF = ("The agent may not suspend or power off machines: this is off by default. The user can "
+                     "turn on \"Agent power actions\" (agent_power_actions) in Plugins > Flota and start a new "
+                     "session; each request then still asks the user for approval. The user can always run "
+                     "`hermes flota sleep|off <machine>` or use `/flota` or the Flota page.")
 
-SCHEMA = {
-    "name": "flota",
-    "description": (
-        "The user's own machines that subagents can run on. Use it to check which machines are on, "
-        "to wake one ahead of work, or to put one to sleep or power it off when the user asks "
-        "(only machines with a wake method can be powered off; the others can only sleep). "
-        "A machine with running subagents is never put to sleep or powered off from here. "
-        "Delegating a task with `machine` already wakes that machine automatically, so you do not "
-        "need to wake it first."),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "action": {"type": "string", "enum": list(ACTIONS),
-                       "description": "status: list machines, whether each is up and its running "
-                                      "subagents. wake / sleep / off: act on `machine`."},
-            "machine": {"type": "string", "description": "Machine name, required for wake, sleep and off."},
+
+def schema(power_actions: bool = False) -> dict:
+    """The tool schema; ``sleep`` / ``off`` are offered only when ``power_actions`` is on."""
+    actions = ACTIONS if power_actions else SAFE_ACTIONS
+    if power_actions:
+        what = ("to wake one ahead of work, or to put one to sleep or power it off when the user asks "
+                "(only machines with a wake method can be powered off; the others can only sleep). "
+                "Sleep and off always ask the user for approval first, because whoever is using that "
+                "machine loses their session. A machine with running subagents is never put to sleep or "
+                "powered off from here. ")
+        action_help = ("status: list machines, whether each is up and its running subagents. "
+                       "wake / sleep / off: act on `machine`.")
+    else:
+        what = ("or to wake one ahead of work. Putting a machine to sleep or powering it off is left to "
+                "the user (`hermes flota sleep|off <machine>`, `/flota`, or the Flota page). ")
+        action_help = ("status: list machines, whether each is up and its running subagents. "
+                       "wake: wake `machine`.")
+    return {
+        "name": TOOL_NAME,
+        "description": (
+            "The user's own machines that subagents can run on. Use it to check which machines are on, "
+            + what + "Delegating a task with `machine` already wakes that machine automatically, so you "
+            "do not need to wake it first."),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": list(actions), "description": action_help},
+                "machine": {"type": "string", "description": "Machine name, required for "
+                            + ("wake, sleep and off." if power_actions else "wake.")},
+            },
+            "required": ["action"],
         },
-        "required": ["action"],
-    },
-}
+    }
+
+
+SCHEMA = schema(False)  # the default: what a fresh install offers the model
 
 
 def _json(**payload) -> str:
@@ -45,8 +75,11 @@ def handle(args: Mapping, *, settings: Mapping, probe, ensure, power, sleeper=No
         args = args if isinstance(args, Mapping) else {}
         machines, _ = load_machines(settings)
         action = args.get("action")
-        if action not in ACTIONS:
-            return _json(error=f"Unknown action {action!r}; use one of: {', '.join(ACTIONS)}.")
+        allowed = ACTIONS if settings.get("agent_power_actions") is True else SAFE_ACTIONS
+        if action in POWER_ACTIONS and action not in allowed:
+            return _json(error=POWER_ACTIONS_OFF)
+        if action not in allowed:
+            return _json(error=f"Unknown action {action!r}; use one of: {', '.join(allowed)}.")
         running = sleeper.active() if sleeper is not None else None
         if action == "status":
             with ThreadPoolExecutor(max_workers=8) as pool:
@@ -125,3 +158,43 @@ def available(load_config=_load_config) -> bool:
         return _effective(load_config() or {})["agent_tool"]
     except Exception:
         return False
+
+
+def power_actions_enabled(load_config=_load_config) -> bool:
+    """The panel's ``agent_power_actions``; False when the config cannot be read."""
+    try:
+        return _effective(load_config() or {})["agent_power_actions"] is True
+    except Exception:
+        return False
+
+
+def _verb(action: str) -> str:
+    return "put to sleep" if action == "sleep" else "power off"
+
+
+def make_approval_hook(load_config=_load_config):
+    """``pre_tool_call`` hook: every ``flota`` call with ``action`` sleep or off goes to the user.
+
+    Returns ``{"action": "approve", "message", "rule_key"}`` (core asks the user and fails closed when
+    no user is present), or ``{"action": "block", ...}`` while ``agent_power_actions`` is off (the
+    handler refuses those calls too, so asking the user would be pointless). Anything else: None.
+    ``rule_key`` is per machine and action, so an "always" answer covers only that pair."""
+    def approve_power_action(tool_name=None, args=None, **_):
+        try:
+            if tool_name != TOOL_NAME or not isinstance(args, Mapping):
+                return None
+            action = args.get("action")
+            if action not in POWER_ACTIONS:
+                return None
+            if not power_actions_enabled(load_config):  # core wraps a block message as {"error": ...}
+                return {"action": "block", "message": POWER_ACTIONS_OFF}
+            raw = args.get("machine")
+            name = raw.strip()[:64] if isinstance(raw, str) and raw.strip() else "(no machine given)"
+            return {"action": "approve",
+                    "message": (f"Flota: the agent wants to {_verb(action)} the machine '{name}'. Anyone "
+                                f"using {name} right now will lose their session (open programs and "
+                                "unsaved work)."),
+                    "rule_key": f"flota:{action}:{name}"}
+        except Exception:  # never let a hook error turn into an unguarded power action
+            return {"action": "block", "message": "flota: the approval check failed, so nothing was done."}
+    return approve_power_action

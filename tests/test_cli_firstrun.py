@@ -190,7 +190,7 @@ def test_doctor_reports_a_missing_key_and_quotes_its_hints(store, monkeypatch, c
         "pc": {"profile": "flota-pc", "host": "10.0.0.5", "user": "alice", "key": "~/my keys/id"}}}}}}
     monkeypatch.setattr(cli, "_key_is_file", lambda path: False)
     monkeypatch.setattr(cli, "_is_up", lambda machine: False)
-    monkeypatch.setattr(cli, "_file_sync_guarded", lambda: True)
+    monkeypatch.setattr(cli, "_core_reads_sync_key", lambda: True)
     assert main("doctor", "pc") == 1
     out = capsys.readouterr().out
     assert "✗ SSH key ~/my keys/id is missing" in out
